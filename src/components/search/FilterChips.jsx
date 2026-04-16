@@ -1,38 +1,38 @@
-import { useCallback } from "react"
+import { useCallback } from 'react'
 
 const FILTER_GROUPS = [
   {
-    label: "Year",
-    key: "date",
+    label: 'Year',
+    key: 'date',
     chips: [
-      { display: "2024", value: "2024" },
-      { display: "2023", value: "2023" },
-      { display: "2022", value: "2022" },
-      { display: "2021", value: "2021" },
-      { display: "2020", value: "2020" },
-      { display: "2019", value: "2019" },
+      { display: '2024', value: '2024' },
+      { display: '2023', value: '2023' },
+      { display: '2022', value: '2022' },
+      { display: '2021', value: '2021' },
+      { display: '2020', value: '2020' },
+      { display: '2019', value: '2019' },
     ],
   },
   {
-    label: "Exam Type",
-    key: "exam-type",
+    label: 'Exam Type',
+    key: 'exam-type',
     chips: [
-      { display: "Main", value: "main" },
-      { display: "Supplementary", value: "supplementary" },
-      { display: "Model", value: "model" },
-      { display: "Improvement", value: "improvement" },
+      { display: 'Main', value: 'main' },
+      { display: 'Supplementary', value: 'supplementary' },
+      { display: 'Model', value: 'model' },
+      { display: 'Improvement', value: 'improvement' },
     ],
   },
   {
-    label: "Language",
-    key: "language",
+    label: 'Language',
+    key: 'language',
     chips: [
-      { display: "English", value: "en" },
-      { display: "Malayalam", value: "ml" },
-      { display: "Hindi", value: "hi" },
-      { display: "Tamil", value: "ta" },
-      { display: "Telugu", value: "te" },
-      { display: "Kannada", value: "kn" },
+      { display: 'English', value: 'en' },
+      { display: 'Malayalam', value: 'ml' },
+      { display: 'Hindi', value: 'hi' },
+      { display: 'Tamil', value: 'ta' },
+      { display: 'Telugu', value: 'te' },
+      { display: 'Kannada', value: 'kn' },
     ],
   },
 ]
@@ -43,14 +43,11 @@ export default function FilterChips({ onFilterChange, activeFilters = {} }) {
   const handleChipClick = useCallback(
     (groupKey, chipValue) => {
       const next = { ...activeFilters }
-
-      // Radio-like toggle: clicking the already-active chip deselects it
       if (next[groupKey] === chipValue) {
         delete next[groupKey]
       } else {
         next[groupKey] = chipValue
       }
-
       if (onFilterChange) onFilterChange(next)
     },
     [activeFilters, onFilterChange],
@@ -61,14 +58,14 @@ export default function FilterChips({ onFilterChange, activeFilters = {} }) {
   }, [onFilterChange])
 
   return (
-    <div className="px-1">
-      <div className="flex flex-wrap items-center gap-4">
+    <div className="overflow-x-auto scrollbar-hide -mx-4 px-4 md:mx-0 md:px-0">
+      <div className="flex items-center gap-4 min-w-max md:min-w-0 md:flex-wrap">
         {FILTER_GROUPS.map((group) => (
           <div key={group.key} className="flex items-center gap-2">
-            <span className="text-sm font-medium text-pyqp-muted">
+            <span className="text-sm font-medium text-pyqp-muted whitespace-nowrap">
               {group.label}:
             </span>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex gap-1.5">
               {group.chips.map((chip) => {
                 const isActive = activeFilters[group.key] === chip.value
                 return (
@@ -76,10 +73,10 @@ export default function FilterChips({ onFilterChange, activeFilters = {} }) {
                     key={chip.value}
                     type="button"
                     onClick={() => handleChipClick(group.key, chip.value)}
-                    className={`inline-block px-3 py-1.5 text-sm rounded-full border cursor-pointer transition-colors ${
+                    className={`inline-block px-3 py-1.5 text-sm rounded-full border cursor-pointer transition-colors whitespace-nowrap ${
                       isActive
-                        ? "bg-pyqp-accent text-white border-pyqp-accent"
-                        : "border-pyqp-border text-pyqp-text-light hover:bg-pyqp-accent hover:text-white hover:border-pyqp-accent"
+                        ? 'bg-pyqp-accent text-white border-pyqp-accent'
+                        : 'border-pyqp-border text-pyqp-text-light hover:bg-pyqp-accent hover:text-white hover:border-pyqp-accent'
                     }`}
                   >
                     {chip.display}
@@ -90,12 +87,11 @@ export default function FilterChips({ onFilterChange, activeFilters = {} }) {
           </div>
         ))}
 
-        {/* Clear all button — visible only when any filter is active */}
         {hasActiveFilters && (
           <button
             type="button"
             onClick={handleClearAll}
-            className="ml-2 px-3 py-1.5 text-sm rounded-full text-pyqp-muted hover:text-pyqp-text hover:bg-pyqp-bg transition-colors cursor-pointer"
+            className="ml-2 px-3 py-1.5 text-sm rounded-full text-pyqp-muted hover:text-pyqp-text hover:bg-pyqp-bg transition-colors cursor-pointer whitespace-nowrap"
           >
             Clear all
           </button>

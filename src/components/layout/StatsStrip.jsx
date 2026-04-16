@@ -19,7 +19,6 @@ export default function StatsStrip() {
           setPaperCount(json?.response?.numFound ?? 0)
         }
       } catch {
-        // On error, fall back to 0 so the strip still renders
         if (!cancelled) setPaperCount(0)
       } finally {
         if (!cancelled) setIsLoading(false)
@@ -32,30 +31,33 @@ export default function StatsStrip() {
 
   const stats = [
     { label: 'Papers Archived', value: paperCount },
-    // TODO: Archive.org doesn't support facet counts easily —
-    // these will need a separate aggregation strategy (e.g. periodic build-time scrape)
-    { label: 'Universities', value: 0 },
-    { label: 'Languages', value: 0 },
-    { label: 'States', value: 0 },
+    { label: 'Universities', value: '\u2014' },
+    { label: 'Languages', value: '\u2014' },
+    { label: 'States', value: '\u2014' },
   ]
 
   return (
-    <section className="bg-pyqp-accent text-white py-8">
+    <section className="bg-pyqp-accent text-white py-4 md:py-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
+        <div className="flex md:grid md:grid-cols-4 gap-6 overflow-x-auto scrollbar-hide snap-x snap-mandatory md:overflow-visible">
           {stats.map((stat) => (
-            <div key={stat.label}>
+            <div
+              key={stat.label}
+              className="flex-shrink-0 snap-center min-w-[140px] md:min-w-0 text-center"
+            >
               {isLoading ? (
                 <div className="flex flex-col items-center gap-2">
-                  <div className="h-9 w-16 bg-white/20 rounded animate-pulse" />
-                  <div className="h-4 w-24 bg-white/10 rounded animate-pulse" />
+                  <div className="h-8 w-14 bg-white/20 rounded animate-pulse" />
+                  <div className="h-3 w-20 bg-white/10 rounded animate-pulse" />
                 </div>
               ) : (
                 <>
-                  <div className="text-3xl font-heading font-bold">
-                    {stat.value?.toLocaleString() ?? 0}
+                  <div className="text-2xl md:text-3xl font-heading font-bold">
+                    {typeof stat.value === 'number'
+                      ? stat.value.toLocaleString()
+                      : stat.value}
                   </div>
-                  <div className="text-sm text-white/70 uppercase tracking-wider mt-1">
+                  <div className="text-xs md:text-sm text-white/70 uppercase tracking-wider mt-1">
                     {stat.label}
                   </div>
                 </>

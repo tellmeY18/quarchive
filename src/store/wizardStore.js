@@ -2,6 +2,7 @@ import { create } from 'zustand'
 
 const initialState = {
   step: 1,
+  source: null, // 'camera' | 'pdf_upload' | null
   metadata: {
     institution: { label: '', qid: '' },
     program: '',
@@ -26,6 +27,8 @@ const useWizardStore = create((set) => ({
   ...initialState,
 
   setStep: (n) => set({ step: n }),
+
+  setSource: (source) => set({ source }),
 
   setMetadata: (field, value) =>
     set((state) => ({

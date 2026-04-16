@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import useWizardStore from '../../../store/wizardStore'
+import StepSource from './StepSource'
 import StepMetadata from './StepMetadata'
 import StepDedupCheck from './StepDedupCheck'
 import StepUpload from './StepUpload'
@@ -12,7 +13,7 @@ const STEPS = [
 
 function StepIndicator({ currentStep }) {
   return (
-    <div className="flex items-center justify-center mb-10">
+    <div className="flex items-center justify-center mb-8 md:mb-10">
       {STEPS.map((s, i) => {
         const isCompleted = currentStep > s.number
         const isCurrent = currentStep === s.number
@@ -20,7 +21,6 @@ function StepIndicator({ currentStep }) {
 
         return (
           <div key={s.number} className="flex items-center">
-            {/* Step circle + label */}
             <div className="flex flex-col items-center">
               <div
                 className={[
@@ -33,18 +33,8 @@ function StepIndicator({ currentStep }) {
                 ].join(' ')}
               >
                 {isCompleted ? (
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    strokeWidth={2.5}
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M4.5 12.75l6 6 9-13.5"
-                    />
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                   </svg>
                 ) : (
                   s.number
@@ -60,11 +50,10 @@ function StepIndicator({ currentStep }) {
               </span>
             </div>
 
-            {/* Connector line (not after last step) */}
             {i < STEPS.length - 1 && (
               <div
                 className={[
-                  'w-16 sm:w-24 h-0.5 mx-2 mb-6 transition-colors',
+                  'w-12 sm:w-16 md:w-24 h-0.5 mx-2 mb-6 transition-colors',
                   currentStep > s.number ? 'bg-pyqp-accent' : 'bg-pyqp-border',
                 ].join(' ')}
               />
@@ -76,12 +65,23 @@ function StepIndicator({ currentStep }) {
   )
 }
 
-export default function UploadWizard() {
+export default function UploadWizard({ onOpenCamera }) {
   const step = useWizardStore((s) => s.step)
+  const file = useWizardStore((s) => s.file)
+  const source = useWizardStore((s) => s.source)
   const uploadStatus = useWizardStore((s) => s.uploadStatus)
+  const setStep = useWizardStore((s) => s.setStep)
+  const setSource = useWizardStore((s) => s.setSource)
   const resetWizard = useWizardStore((s) => s.resetWizard)
 
-  // Warn user before leaving the page if they have progress to lose
+  // If file is already set (from camera), ensure we're at metadata step
+  useEffect(() => {
+    if (file && source === 'camera' && step < 1) {
+      setStep(1)
+    }
+  }, [file, source, step, setStep])
+
+  // Warn before leaving with progress
   useEffect(() => {
     function handleBeforeUnload(e) {
       if (step > 1 && uploadStatus !== 'success') {
@@ -97,6 +97,25 @@ export default function UploadWizard() {
       resetWizard()
     }
   }, [step, uploadStatus, resetWizard])
+
+  // Show source selection if no file and no source chosen
+  if (!file && !source) {
+    return (
+      <div className="w-full max-w-2xl mx-auto">
+        <StepSource
+          onSelectCamera={() => {
+            if (onOpenCamera) {
+              onOpenCamera()
+            }
+          }}
+          onSelectPdf={() => {
+            setSource('pdf_upload')
+            setStep(1)
+          }}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="w-full max-w-2xl mx-auto">
