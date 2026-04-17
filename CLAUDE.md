@@ -681,7 +681,34 @@ npm run build
 
 ---
 
-## 22. Open Questions / Future Work
+## 23. Playwright E2E Testing Strategy
+
+Because this platform is mobile-first and relies heavily on browser APIs (like the camera) and third-party services (Archive.org, Cloudflare), End-to-End (E2E) testing with Playwright is critical. We prioritize simulating real-world conditions over unit-testing implementation details.
+
+### 1. Mobile-First Emulation
+All primary test suites must run using Playwright's mobile device profiles (e.g., `devices['Pixel 5']` and `devices['iPhone 13']`). This ensures we are testing the mobile UI components (`BottomNav`, `LoginSheet`, full-width cards) and touch interactions (swiping, bottom-sheet dismissal), not just the desktop fallbacks.
+
+### 2. Mocking Archive.org APIs
+We do not run tests against the live Archive.org production APIs to avoid rate limits and pollution.
+- **Search API (`advancedsearch.php`)**: Intercept requests to this endpoint and return a static JSON fixture containing dummy paper metadata.
+- **Metadata API (`metadata/:identifier`)**: Mock this for the deduplication check step, returning either a 404 (no duplicate) or a 200 with JSON (duplicate found).
+
+### 3. Mocking Cloudflare Workers
+The frontend interacts with Cloudflare Pages Functions (`/functions/api/*`). These should be intercepted at the network level in Playwright:
+- **`/api/login`**: Return a mock successful response with fake `accessKey` and `secretKey`, or a 401 for invalid credentials testing.
+- **`/api/s3keys`**: Return mock S3 keys to simulate session restoration.
+- **`/api/upload`**: Intercept the PUT request. Verify the `Authorization` header and the `x-archive-meta-*` headers are correctly formatted, then return a mock 200 OK. Do not actually upload the generated PDF.
+
+### 4. Mocking `getUserMedia` (Camera Capture)
+Testing the "Scan Paper" flow is the most complex part of the suite.
+- **Bypassing Permissions**: Configure the Playwright browser context to auto-grant camera permissions using `permissions: ['camera']`.
+- **Fake Media Stream**: Use Playwright's launch arguments (e.g., `--use-fake-ui-for-media-stream` and `--use-fake-device-for-media-stream`) to feed a dummy video file or a static color frame to `getUserMedia`.
+- **Testing the PDF Pipeline**: By feeding a static image into the fake camera stream, the test can "capture" frames, verify they appear in the `PageReview` tray, and assert that the `pdf-lib` pipeline outputs a Blob of type `application/pdf`.
+- **Permission Denied State**: Create a specific test context that explicitly denies camera permissions to verify the fallback UI (prompt to upload PDF instead) appears correctly.
+
+---
+
+## 24. Open Questions / Future Work
 
 - [ ] Verify exact CORS behavior of `archive.org/services/xauthn/?op=login` when proxied through Cloudflare Workers — test first
 - [ ] Handle Archive.org accounts with 2FA (show graceful fallback to manual key entry)

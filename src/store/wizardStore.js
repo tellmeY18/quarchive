@@ -1,27 +1,48 @@
-import { create } from 'zustand'
+import { create } from "zustand";
+
+const currentDate = new Date();
+const currentYear = currentDate.getFullYear().toString();
+const monthNames = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+const currentMonth = monthNames[currentDate.getMonth()];
 
 const initialState = {
   step: 1,
   source: null, // 'camera' | 'pdf_upload' | null
   metadata: {
-    institution: { label: '', qid: '' },
-    program: '',
-    courseName: '',
-    courseCode: '',
-    year: '',
-    month: '',
-    examType: '',
-    semester: '',
-    language: 'en',
+    institution: {
+      label: "National Institute of Technology Calicut",
+      qid: "Q6973731",
+    },
+    program: "",
+    courseName: "",
+    courseCode: "",
+    year: currentYear,
+    month: currentMonth,
+    examType: "",
+    semester: "",
+    language: "en",
   },
   file: null,
-  fileHash: '',
-  identifier: '',
+  fileHash: "",
+  identifier: "",
   dedupStatus: null,
   duplicateItem: null,
   uploadStatus: null,
   uploadError: null,
-}
+};
 
 const useWizardStore = create((set) => ({
   ...initialState,
@@ -50,6 +71,6 @@ const useWizardStore = create((set) => ({
   setUploadError: (msg) => set({ uploadError: msg }),
 
   resetWizard: () => set({ ...initialState }),
-}))
+}));
 
-export default useWizardStore
+export default useWizardStore;

@@ -117,7 +117,27 @@
 
 ---
 
-## Phase 6 — Future / Backlog
+## Phase 6 — E2E Testing (Playwright)
+
+**Goal:** Establish a robust automated testing suite for core user flows, focusing heavily on mobile viewport emulation and mocking external dependencies to ensure reliable CI/CD runs without hitting real APIs.
+
+### Tasks
+
+- [x] **Setup & Config** — Install Playwright. Configure default projects for Mobile Chrome (Pixel 5) and Mobile Safari (iPhone 12). Set up base URL for local dev server.
+- [x] **Mocking Strategy (Archive.org & Cloudflare)** — Implement network interception (`page.route()`) for:
+  - `archive.org/advancedsearch.php` (Search queries)
+  - `/functions/api/login` (Auth Worker)
+  - `/functions/api/upload` (Upload Worker)
+  - Wikidata SPARQL endpoint
+- [x] **Mocking Camera (`getUserMedia`)** — Launch browser with `--use-fake-ui-for-media-stream` and `--use-fake-device-for-media-stream` arguments. Serve a static test video or image for camera feed testing.
+- [x] **Navigation & Search Tests** — Verify BottomNav routing. Test search input debounce. Validate search results render correctly using mocked Search API responses.
+- [x] **Auth Tests** — Test LoginSheet (bottom sheet on mobile). Validate successful login sets auth state and cookies. Validate error states (wrong password, network error).
+- [x] **Camera / PDF Upload Tests** — Test the complete "Happy Path": Trigger camera -> capture 2 pages (using fake video stream) -> review pages -> assemble PDF -> fill metadata -> mock upload success. Test fallback PDF upload flow.
+- [x] **Edge Cases & Error Handling** — Test camera permission denied handling. Test duplicate upload detection (Layer 2 mock). Test offline handling during upload flow.
+
+---
+
+## Phase 7 — Future / Backlog
 
 *Not sequenced. Pick up after Phase 5 ships.*
 
