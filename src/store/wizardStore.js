@@ -26,7 +26,7 @@ const initialState = {
       label: "National Institute of Technology Calicut",
       qid: "Q6973731",
     },
-    program: "",
+    program: "B.Tech",
     courseName: "",
     courseCode: "",
     year: currentYear,
