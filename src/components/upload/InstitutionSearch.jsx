@@ -3,6 +3,7 @@ import {
   getInstitutionList,
   searchInstitutionsLocal,
   searchInstitutionsRemote,
+  fetchInstitutionByQid,
 } from "../../lib/wikidata";
 import useGeolocation from "../../hooks/useGeolocation";
 import { INDIAN_STATES } from "../../lib/indianStates";
@@ -128,6 +129,16 @@ export default function InstitutionSearch({ value, onChange }) {
       remoteFallbackTimer.current = setTimeout(async () => {
         setIsLoadingRemote(true);
         try {
+          const isQid = /^Q\d+$/i.test(val.trim());
+          if (isQid) {
+            const qidResult = await fetchInstitutionByQid(val.trim());
+            if (qidResult) {
+              setResults([qidResult]);
+              setIsOpen(true);
+              return;
+            }
+          }
+          
           const remoteResults = await searchInstitutionsRemote(
             val,
             effectiveStateQid || null,
@@ -250,8 +261,8 @@ export default function InstitutionSearch({ value, onChange }) {
   })();
 
   const inputPlaceholder = effectiveStateObj
-    ? `Start typing institution name in ${effectiveStateObj.name}...`
-    : "Start typing university / college name...";
+    ? `Institution name or Wikidata ID (e.g. Q874586) in ${effectiveStateObj.name}...`
+    : "Institution name or Wikidata ID (e.g. Q874586)...";
 
   return (
     <div ref={containerRef} className="relative space-y-3">

@@ -901,3 +901,48 @@ export function clearInstitutionCache(stateQid = null) {
     /* no-op */
   }
 }
+
+export async function fetchInstitutionByQid(qid) {
+  const cleanQid = String(qid).trim().toUpperCase();
+  if (!/^Q\d+$/.test(cleanQid)) return null;
+
+  const sparql = `
+SELECT ?item ?itemLabel ?locationLabel WHERE {
+  BIND(wd:${cleanQid} AS ?item)
+  OPTIONAL { ?item wdt:P131 ?location . }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
+} LIMIT 1
+  `;
+
+  const url = `${WIKIDATA_SPARQL_ENDPOINT}?query=${encodeURIComponent(sparql)}`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Accept: "application/sparql-results+json",
+        "User-Agent": "Quarchive/2.0 (https://github.com/quarchive; educational project)",
+      },
+    });
+    
+    if (!res.ok) return null;
+    const json = await res.json();
+    
+    if (!json.results || !json.results.bindings || json.results.bindings.length === 0) {
+      return null;
+    }
+    
+    const b = json.results.bindings[0];
+    
+    if (!b.itemLabel || b.itemLabel.value === cleanQid) {
+      return null;
+    }
+    
+    return {
+      qid: cleanQid,
+      label: b.itemLabel.value,
+      location: b.locationLabel ? b.locationLabel.value : null,
+      altLabel: null,
+    };
+  } catch (err) {
+    return null;
+  }
+}
