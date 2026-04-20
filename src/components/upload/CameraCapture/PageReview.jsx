@@ -55,9 +55,14 @@ export default function PageReview({ onConfirm, onRetake }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-white flex flex-col">
+    <div className="fixed inset-0 z-[60] bg-white flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-pyqp-border">
+      <div
+        className="flex items-center justify-between px-4 py-3 border-b border-pyqp-border"
+        style={{
+          paddingTop: "calc(0.75rem + env(safe-area-inset-top, 0px))",
+        }}
+      >
         <button
           type="button"
           onClick={onRetake}
@@ -202,7 +207,12 @@ export default function PageReview({ onConfirm, onRetake }) {
       )}
 
       {/* Bottom actions */}
-      <div className="flex items-center justify-between px-4 py-3 border-t border-pyqp-border">
+      <div
+        className="flex items-center justify-between px-4 py-3 border-t border-pyqp-border"
+        style={{
+          paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom, 0px))",
+        }}
+      >
         <button
           type="button"
           onClick={handleDelete}

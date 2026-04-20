@@ -13,7 +13,7 @@ export default function PdfPreview({ onConfirm, onRetake }) {
   if (converting) {
     const pct = Math.round(convertProgress * 100);
     return (
-      <div className="fixed inset-0 z-50 bg-white flex flex-col items-center justify-center py-16 px-4">
+      <div className="fixed inset-0 z-[60] bg-white flex flex-col items-center justify-center py-16 px-4">
         <svg
           className="animate-spin h-10 w-10 text-pyqp-accent mb-4"
           xmlns="http://www.w3.org/2000/svg"
@@ -48,14 +48,20 @@ export default function PdfPreview({ onConfirm, onRetake }) {
 
   if (!pdfBlob) {
     return (
-      <div className="fixed inset-0 z-50 bg-white flex flex-col items-center justify-center py-12">
+      <div className="fixed inset-0 z-[60] bg-white flex flex-col items-center justify-center py-12">
         <p className="text-pyqp-muted">No PDF generated yet.</p>
       </div>
     );
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-white flex flex-col space-y-6 px-4 py-6 overflow-y-auto">
+    <div
+      className="fixed inset-0 z-[60] bg-white flex flex-col space-y-6 px-4 py-6 overflow-y-auto"
+      style={{
+        paddingTop: "calc(1.5rem + env(safe-area-inset-top, 0px))",
+        paddingBottom: "calc(1.5rem + env(safe-area-inset-bottom, 0px))",
+      }}
+    >
       {/* Success card */}
       <div className="bg-green-50 border border-green-200 rounded-xl p-5 text-center">
         <svg
