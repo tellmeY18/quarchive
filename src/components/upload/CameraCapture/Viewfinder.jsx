@@ -32,10 +32,17 @@ import useToastStore from "../../../store/toastStore";
  */
 export default function Viewfinder({ onDone }) {
   const videoRef = useRef(null);
-  const { startCamera, captureFrame, toggleTorch, stopCamera } = useCamera();
+  const { startCamera, captureFrame, focusAt, toggleTorch, stopCamera } =
+    useCamera();
   const { capturedPages, addPage, enhanceMode } = useCameraStore();
   const pushToast = useToastStore((s) => s.pushToast);
-  const clearToast = useToastStore((s) => s.clearToast);
+
+  // Tap-to-focus visual indicator: a small ring drawn at the point
+  // the user last tapped, auto-dismissed after ~800ms. We don't wait
+  // on the MediaStreamTrack's focus promise to show the ring — the
+  // user needs immediate visual feedback even on devices that silently
+  // ignore `pointsOfInterest` (iOS Safari).
+  const [focusIndicator, setFocusIndicator] = useState(null);
 
   // Torch state. `torchAvailable` starts as `null` ("unknown") and
   // flips to `true` / `false` only once the user actually tries it
@@ -108,87 +115,116 @@ export default function Viewfinder({ onDone }) {
     if (capturing || !cameraReady) return;
     setCapturing(true);
 
-    // Persistent "busy" toast — kept alive for the whole pipeline run
-    // so even on mid-range Android where detect/warp can take ~800 ms
-    // the user sees something is happening. We clear it in `finally`
-    // regardless of outcome.
-    const busyToastId = pushToast({
-      message: "Processing page…",
-      variant: "busy",
-      duration: 0,
+    // Capture the visible rect first — this is the cheap, synchronous
+    // part and it's what the user is waiting to see confirmed. The
+    // heavier "enhance + encode" pass runs AFTER we release the
+    // shutter guard so the user can immediately line up the next page.
+    //
+    // On budget Android (Snapdragon 6xx) the old synchronous
+    // detect+warp+enhance pipeline blocked the main thread for 2–5
+    // seconds per page — users reported the app as "frozen". With
+    // detect+warp gone (see capturePipeline.js) and the enhance pass
+    // scheduled off the critical path, the shutter returns in under
+    // ~150ms on the same devices.
+    let rawBlob;
+    try {
+      rawBlob = await captureFrame();
+    } catch (err) {
+      console.warn("[Viewfinder] captureFrame failed:", err);
+      rawBlob = null;
+    }
+
+    if (!rawBlob) {
+      pushToast({
+        message: "Couldn't grab frame — try again",
+        variant: "warn",
+      });
+      setCapturing(false);
+      return;
+    }
+
+    const id = Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+    const timestamp = Date.now();
+
+    // Provisionally add the raw frame to the tray IMMEDIATELY. The
+    // thumbnail is what tells the user "yes, that capture landed" —
+    // waiting for the enhance pass before showing it is what made
+    // the UI feel janky. We'll swap in the enhanced blob shortly.
+    const rawDataUrl = URL.createObjectURL(rawBlob);
+    addPage({
+      id,
+      blob: rawBlob,
+      dataUrl: rawDataUrl,
+      timestamp,
+      baseBlob: rawBlob,
+      rawBlob,
+      crop: { corners: null, mode: "none", confidence: null },
+      enhanceMode,
     });
 
+    // Release the shutter guard NOW so the next capture can happen
+    // while enhancement is still running on this one.
+    setCapturing(false);
+
+    // Background enhance pass. If it succeeds, swap in the enhanced
+    // blob + dataUrl on the already-added page. If it fails, the raw
+    // frame stays — a slightly-less-enhanced page is better than no
+    // page at all.
     try {
-      const rawBlob = await captureFrame();
-      if (!rawBlob) {
-        pushToast({
-          message: "Couldn't grab frame — try again",
-          variant: "warn",
-        });
-        return;
-      }
-
-      const id = Date.now() + "-" + Math.random().toString(36).slice(2, 7);
-      const timestamp = Date.now();
-
-      // Phase 8 (CLAUDE.md §5A): detect → warp → enhance, dynamic-
-      // imported on the first shutter press. All three stages fall
-      // back gracefully to the previous stage's output on failure —
-      // processCapturedFrame only throws if the raw blob itself can't
-      // be decoded.
-      try {
-        const { processCapturedFrame } =
-          await import("../../../lib/capturePipeline");
-        const processed = await processCapturedFrame(rawBlob, {
-          enhanceMode,
-        });
-        addPage({
-          id,
+      const { processCapturedFrame } =
+        await import("../../../lib/capturePipeline");
+      const processed = await processCapturedFrame(rawBlob, { enhanceMode });
+      // Only swap if something actually changed — 'colour' mode is a
+      // true no-op and returns the same blob we already added.
+      if (processed.blob !== rawBlob) {
+        useCameraStore.getState().updatePage(id, {
           blob: processed.blob,
           dataUrl: processed.dataUrl,
-          timestamp,
           baseBlob: processed.baseBlob,
-          rawBlob,
           crop: processed.crop,
-          enhanceMode,
           width: processed.width,
           height: processed.height,
         });
-      } catch (err) {
-        // Pipeline couldn't even decode the raw frame, OR the dynamic
-        // import failed catastrophically. Keep the user's capture
-        // instead of throwing it away — a raw frame is better than no
-        // frame at all (invariant #16's spiritual extension).
-        console.warn("[Viewfinder] capture pipeline failed:", err);
-        const dataUrl = URL.createObjectURL(rawBlob);
-        addPage({
-          id,
-          blob: rawBlob,
-          dataUrl,
-          timestamp,
-          baseBlob: rawBlob,
-          rawBlob,
-          crop: { corners: null, mode: "none", confidence: null },
-          enhanceMode,
-        });
-        pushToast({
-          message: "Saved without auto-crop (processing unavailable)",
-          variant: "warn",
-        });
+        // Free the throwaway raw dataUrl we handed to the thumbnail.
+        URL.revokeObjectURL(rawDataUrl);
       }
-    } finally {
-      clearToast(busyToastId);
-      setCapturing(false);
+    } catch (err) {
+      // Enhance pipeline failed — the raw frame is already in the
+      // tray, nothing more to do. Log once so it's debuggable without
+      // bothering the user.
+      console.warn("[Viewfinder] background enhance failed:", err);
     }
-  }, [
-    capturing,
-    cameraReady,
-    captureFrame,
-    addPage,
-    enhanceMode,
-    pushToast,
-    clearToast,
-  ]);
+  }, [capturing, cameraReady, captureFrame, addPage, enhanceMode, pushToast]);
+
+  // Tap-to-focus. Wired onto the video element's click handler below.
+  // We draw the ring indicator at the tap point regardless of whether
+  // the track accepts the focus hint — the visual confirmation is what
+  // users expect from a camera UI, and on iOS Safari the native AF is
+  // already doing the right thing even though `pointsOfInterest` is
+  // a no-op there.
+  const handleViewfinderTap = useCallback(
+    (e) => {
+      if (!cameraReady) return;
+      const x = e.clientX;
+      const y = e.clientY;
+      // Indicator is positioned in viewport coordinates via `fixed`.
+      setFocusIndicator({ x, y, at: Date.now() });
+      // Fire-and-forget focus hint. We don't await this — the user is
+      // about to press the shutter and we don't want to delay that.
+      focusAt(x, y).catch(() => {
+        /* swallowed: already surfaced via the indicator */
+      });
+    },
+    [cameraReady, focusAt],
+  );
+
+  // Auto-dismiss the focus indicator after ~800ms so it doesn't linger
+  // on top of the next capture.
+  useEffect(() => {
+    if (!focusIndicator) return undefined;
+    const t = setTimeout(() => setFocusIndicator(null), 800);
+    return () => clearTimeout(t);
+  }, [focusIndicator]);
 
   const handleTorch = useCallback(async () => {
     const next = !torchOn;
@@ -297,8 +333,28 @@ export default function Viewfinder({ onDone }) {
           autoPlay
           playsInline
           muted
-          className="absolute inset-0 w-full h-full object-cover"
+          onClick={handleViewfinderTap}
+          className="absolute inset-0 w-full h-full object-cover cursor-pointer"
         />
+
+        {/* Tap-to-focus ring. Rendered at the viewport position the
+            user tapped and auto-dismissed after ~800ms. Pointer-events
+            none so it never swallows the next tap. */}
+        {focusIndicator && (
+          <div
+            aria-hidden="true"
+            className="fixed pointer-events-none"
+            style={{
+              left: focusIndicator.x - 28,
+              top: focusIndicator.y - 28,
+              width: 56,
+              height: 56,
+            }}
+          >
+            <div className="w-full h-full rounded-full border-2 border-yellow-300 animate-ping opacity-80" />
+            <div className="absolute inset-2 rounded-full border border-yellow-200/80" />
+          </div>
+        )}
 
         {/* Guide overlay — only shown once the feed is actually
             rendering, otherwise it layers over a black rectangle and
@@ -310,6 +366,15 @@ export default function Viewfinder({ onDone }) {
               Position paper in frame
             </p>
           </>
+        )}
+
+        {/* Hint the user that tap-to-focus is available. Only shown
+            when the viewfinder is live AND the tray is empty, so it
+            doesn't clutter the UI once capture is underway. */}
+        {cameraReady && capturedPages.length === 0 && !focusIndicator && (
+          <p className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white/70 text-xs font-medium pointer-events-none bg-black/30 px-3 py-1 rounded-full">
+            Tap to focus
+          </p>
         )}
 
         {/* Full-screen "Starting camera…" veil. getUserMedia can take

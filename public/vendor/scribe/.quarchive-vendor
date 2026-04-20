@@ -1,7 +1,9 @@
 {
-  "copiedAt": "2026-04-20T20:16:40.072Z",
+  "copiedAt": "2026-04-20T21:03:48.156Z",
   "entries": [
     "scribe.js",
+    "js",
+    "mupdf",
     "lib",
     "tess",
     "fonts"

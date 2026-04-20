@@ -15,26 +15,49 @@
  * is stripped in some environments.
  */
 
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const projectRoot = path.resolve(__dirname, '..');
+const projectRoot = path.resolve(__dirname, "..");
 
-const SCRIBE_SRC = path.join(projectRoot, 'node_modules', 'scribe.js-ocr');
-const VENDOR_DST = path.join(projectRoot, 'public', 'vendor', 'scribe');
+const SCRIBE_SRC = path.join(projectRoot, "node_modules", "scribe.js-ocr");
+const VENDOR_DST = path.join(projectRoot, "public", "vendor", "scribe");
 
-/** Entries to copy from node_modules/scribe.js-ocr → public/vendor/scribe. */
+/** Entries to copy from node_modules/scribe.js-ocr → public/vendor/scribe.
+ *
+ * scribe.js (the ESM entry point we import from the OCR worker) contains
+ * relative imports to `./js/...` and uses `./mupdf/...` at runtime for PDF
+ * decoding. If we vendor only `scribe.js` itself, every one of those
+ * internal imports 404s against the dev server / Cloudflare Pages origin
+ * and scribe.js-ocr fails to initialise — which is exactly why the OCR
+ * metadata pills never appeared in StepMetadata.
+ *
+ * So we mirror the full set of runtime directories here. Anything that
+ * isn't loaded at runtime (docs/, examples/, cli/, scrollview-web/,
+ * LICENSE, README) is intentionally left out to keep the vendor footprint
+ * small.
+ */
 const ENTRIES = [
-  // Core scribe.js module + its internal lib/ folder (workers, WASM, fonts).
-  { from: 'scribe.js', to: 'scribe.js' },
-  { from: 'lib', to: 'lib' },
-  // Tesseract language data — required for OCR to actually run.
-  { from: 'tess', to: 'tess' },
+  // Core scribe.js module.
+  { from: "scribe.js", to: "scribe.js" },
+  // Internal JS modules that scribe.js imports via relative `./js/...`
+  // paths. Without these, scribe.js itself fails to load (the root
+  // cause of Phase 8 OCR silently producing no suggestions).
+  { from: "js", to: "js" },
+  // MuPDF WASM bundle used by scribe for PDF rasterisation. Loaded
+  // lazily at OCR time from `./mupdf/...` — missing it causes the
+  // first real `ocrFirstPages` call to reject.
+  { from: "mupdf", to: "mupdf" },
+  // scribe's internal lib/ folder (opentype, zip.js workers, etc.).
+  { from: "lib", to: "lib" },
+  // Tesseract language data + worker scripts — required for OCR to
+  // actually run.
+  { from: "tess", to: "tess" },
   // Fonts bundled by scribe (used for layout-aware text extraction).
-  { from: 'fonts', to: 'fonts' },
+  { from: "fonts", to: "fonts" },
 ];
 
 async function pathExists(p) {
@@ -68,7 +91,7 @@ async function main() {
     // silently fall back to "no suggestions" at runtime, which is the
     // documented behaviour (CLAUDE.md invariant 14).
     console.log(
-      '[copy-scribe-assets] scribe.js-ocr not installed, skipping vendor copy',
+      "[copy-scribe-assets] scribe.js-ocr not installed, skipping vendor copy",
     );
     return;
   }
@@ -95,7 +118,7 @@ async function main() {
   // Write a small marker so we can detect a successful copy at runtime
   // without guessing at directory layout.
   await fs.writeFile(
-    path.join(VENDOR_DST, '.quarchive-vendor'),
+    path.join(VENDOR_DST, ".quarchive-vendor"),
     JSON.stringify(
       {
         copiedAt: new Date().toISOString(),
@@ -114,5 +137,5 @@ async function main() {
 main().catch((err) => {
   // Never fail the install. Phase 8 is best-effort; the rest of Quarchive
   // must remain installable even if asset copy goes wrong.
-  console.warn('[copy-scribe-assets] WARNING:', err.message);
+  console.warn("[copy-scribe-assets] WARNING:", err.message);
 });

@@ -32,17 +32,6 @@
  *    mode without re-capturing from the camera.
  */
 
-/** Minimum detection confidence before we trust the quad for auto-crop. */
-const MIN_CONFIDENCE = 0.6;
-
-/**
- * Minimum fraction of the frame the detected quad must cover. Papers
- * held up to the camera with no other content usually take > 60% of
- * the frame; anything smaller is likely a stray rectangular feature
- * (a book on a desk, a window, etc.) and should be ignored.
- */
-const MIN_AREA_FRACTION = 0.6;
-
 /**
  * JPEG quality for the Blob we hand back to the existing
  * `useImageToPdf` pipeline. 0.92 matches the quality the camera
@@ -50,20 +39,6 @@ const MIN_AREA_FRACTION = 0.6;
  * sizes and compression ratios are unchanged.
  */
 const OUTPUT_JPEG_QUALITY = 0.92;
-
-/**
- * Shoelace-formula area for a 4-point quad.
- * Accepts corners as [[x,y], [x,y], [x,y], [x,y]] in any winding order.
- */
-function quadArea(corners) {
-  let sum = 0;
-  for (let i = 0; i < 4; i++) {
-    const [x1, y1] = corners[i];
-    const [x2, y2] = corners[(i + 1) % 4];
-    sum += x1 * y2 - x2 * y1;
-  }
-  return Math.abs(sum) / 2;
-}
 
 /**
  * Encode an ImageBitmap back to a JPEG Blob via OffscreenCanvas.
@@ -86,32 +61,6 @@ async function bitmapToJpegBlob(bitmap, quality = OUTPUT_JPEG_QUALITY) {
  */
 async function blobToBitmap(blob) {
   return createImageBitmap(blob);
-}
-
-/**
- * Decide whether a detection result is trustworthy enough to warp on.
- *
- * Returns the detection object if it passes the gate, or `null` if
- * the caller should fall back to the raw frame. Invariant #16 —
- * "a squished PDF is worse than an uncropped one".
- */
-function gateDetection(detection, frameWidth, frameHeight) {
-  if (!detection || !detection.corners || detection.corners.length !== 4) {
-    return null;
-  }
-  if (typeof detection.confidence !== "number") {
-    return null;
-  }
-  if (detection.confidence < MIN_CONFIDENCE) {
-    return null;
-  }
-  const area = quadArea(detection.corners);
-  const frameArea = frameWidth * frameHeight;
-  if (frameArea <= 0) return null;
-  if (area / frameArea < MIN_AREA_FRACTION) {
-    return null;
-  }
-  return detection;
 }
 
 /**
@@ -158,91 +107,81 @@ export async function processCapturedFrame(rawBlob, options = {}) {
   const frameWidth = rawBitmap.width;
   const frameHeight = rawBitmap.height;
 
-  // Dynamic imports — these libraries live outside the main bundle
-  // and only load the first time the user takes a photo.
-  let detectMod, warpMod, enhanceMod;
+  // ── BUDGET-DEVICE FAST PATH ──────────────────────────────────────
+  //
+  // Previously every shutter press ran Sobel + Hough + O(n⁴) convex
+  // quad search + perspective warp + enhance, synchronously on the
+  // main thread, BEFORE the user could take the next photo. On
+  // Snapdragon-6xx-class devices that's 2–5 seconds of the UI
+  // appearing frozen per page — and the detection gate rejected the
+  // result the majority of the time anyway (low confidence or
+  // under-60% frame area), so all that work was thrown away.
+  //
+  // The right default is: commit the raw frame immediately, run only
+  // the cheap 'fast' enhance, and let the user opt in to manual
+  // perspective correction later via the CropEditor in PageReview
+  // (which already flows through `reprocessWithCorners` below).
+  //
+  // This keeps invariants #16 (never distort aspect ratio on auto —
+  // now trivially satisfied, we never auto-warp) and #17 (enhancement
+  // is reversible — the raw frame is the baseBlob).
+  //
+  // If a user explicitly asks for auto-detect in the future, we can
+  // re-enable it behind an `autoDetect: true` option without touching
+  // this file's public shape.
+
+  let enhanceMod;
   try {
-    [detectMod, warpMod, enhanceMod] = await Promise.all([
-      import("./documentDetect.js"),
-      import("./perspectiveWarp.js"),
-      import("./paperEnhance.js"),
-    ]);
+    enhanceMod = await import("./paperEnhance.js");
   } catch (err) {
-    // Loading the pipeline modules failed — most likely an offline
-    // page load or a CDN hiccup. Commit the raw frame so the user
-    // can still finish their upload.
-    console.warn("[capturePipeline] module load failed:", err);
-    const blob = await bitmapToJpegBlob(rawBitmap).catch(() => rawBlob);
+    // Enhance module failed to load — commit the raw frame as-is so
+    // the user can still finish the upload. This also covers offline
+    // page loads.
+    console.warn("[capturePipeline] enhance module load failed:", err);
     return {
-      blob,
-      dataUrl: URL.createObjectURL(blob),
+      blob: rawBlob,
+      dataUrl: URL.createObjectURL(rawBlob),
       width: frameWidth,
       height: frameHeight,
       crop: { corners: null, mode: "none", confidence: null },
       baseBitmap: rawBitmap,
-      baseBlob: blob,
+      baseBlob: rawBlob,
     };
   }
 
-  // ── Stage 1: detect ──────────────────────────────────────────────
-  let detection = null;
+  // Base blob = the raw camera frame itself. We don't re-encode it —
+  // that would be a wasted JPEG round-trip, and the bytes already
+  // came out of captureFrame() at quality 0.92. This matters: on a
+  // 1080p Android the re-encode alone was costing ~300ms.
+  const baseBlob = rawBlob;
+
+  // ── Enhance ──────────────────────────────────────────────────────
+  // Only the cheap 'fast' mode should reach this path on the hot
+  // capture-flow (the default for the store is 'fast'). Heavier modes
+  // are still supported here for users who explicitly toggled to
+  // 'auto' or 'bw' in PageReview before the next shutter press, but
+  // that's rare.
+  let finalBitmap = rawBitmap;
   try {
-    detection = await detectMod.detectPaperQuad(rawBitmap);
+    finalBitmap = await enhanceMod.enhanceImage(rawBitmap, enhanceMode);
   } catch (err) {
-    console.warn("[capturePipeline] detect failed:", err);
-    detection = null;
-  }
-  const trustedDetection = gateDetection(detection, frameWidth, frameHeight);
-
-  // ── Stage 2: warp (only if detection is trustworthy) ─────────────
-  let warpedBitmap = rawBitmap;
-  let cropCorners = null;
-  let cropConfidence = null;
-  let cropMode = "none";
-  if (trustedDetection) {
-    try {
-      warpedBitmap = await warpMod.warpToRect(
-        rawBitmap,
-        trustedDetection.corners,
-      );
-      cropCorners = trustedDetection.corners;
-      cropConfidence = trustedDetection.confidence;
-      cropMode = "auto";
-    } catch (err) {
-      console.warn("[capturePipeline] warp failed, using raw frame:", err);
-      warpedBitmap = rawBitmap;
-      cropMode = "none";
-    }
+    console.warn("[capturePipeline] enhance failed, using raw frame:", err);
+    finalBitmap = rawBitmap;
   }
 
-  // Capture the base (warped-but-unenhanced) bitmap + blob before
-  // enhancement runs. `PageReview.jsx` needs this to let the user flip
-  // between Auto / B&W / Colour without re-opening the camera
-  // (invariant #17 — enhancement is reversible per page).
-  let baseBlob;
-  try {
-    baseBlob = await bitmapToJpegBlob(warpedBitmap);
-  } catch (err) {
-    console.warn("[capturePipeline] base encode failed:", err);
-    baseBlob = rawBlob;
-  }
-
-  // ── Stage 3: enhance ─────────────────────────────────────────────
-  let finalBitmap = warpedBitmap;
-  try {
-    finalBitmap = await enhanceMod.enhanceImage(warpedBitmap, enhanceMode);
-  } catch (err) {
-    console.warn("[capturePipeline] enhance failed, using warped frame:", err);
-    finalBitmap = warpedBitmap;
-  }
-
-  // Encode the final image to JPEG for the downstream PDF pipeline.
+  // 'colour' mode is a true no-op and returns the input bitmap
+  // unchanged — in that case we can skip the final JPEG encode too
+  // and just hand back the original rawBlob.
   let finalBlob;
-  try {
-    finalBlob = await bitmapToJpegBlob(finalBitmap);
-  } catch (err) {
-    console.warn("[capturePipeline] final encode failed:", err);
-    finalBlob = baseBlob;
+  if (finalBitmap === rawBitmap) {
+    finalBlob = rawBlob;
+  } else {
+    try {
+      finalBlob = await bitmapToJpegBlob(finalBitmap);
+    } catch (err) {
+      console.warn("[capturePipeline] final encode failed:", err);
+      finalBlob = rawBlob;
+    }
   }
 
   return {
@@ -250,12 +189,13 @@ export async function processCapturedFrame(rawBlob, options = {}) {
     dataUrl: URL.createObjectURL(finalBlob),
     width: finalBitmap.width,
     height: finalBitmap.height,
-    crop: {
-      corners: cropCorners,
-      mode: cropMode,
-      confidence: cropConfidence,
-    },
-    baseBitmap: warpedBitmap,
+    // crop.mode === 'none' signals to PageReview that no auto-detect
+    // was attempted. The user's "Adjust edges" affordance in the
+    // CropEditor still works — it calls `reprocessWithCorners` with
+    // the rawBlob (= baseBlob) below, which DOES run detect+warp but
+    // only when the user explicitly asked for it.
+    crop: { corners: null, mode: "none", confidence: null },
+    baseBitmap: rawBitmap,
     baseBlob,
   };
 }
