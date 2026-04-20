@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from 'react'
-import useWizardStore from '../../../store/wizardStore'
-import { layer1HashCheck, layer2IdentifierCheck } from '../../../lib/dedup'
-import { buildItemUrl, buildThumbnailUrl } from '../../../lib/archiveOrg'
+import { useState, useEffect, useRef } from "react";
+import useWizardStore from "../../../store/wizardStore";
+import { layer1HashCheck, layer2IdentifierCheck } from "../../../lib/dedup";
+import { buildItemUrl, buildThumbnailUrl } from "../../../lib/archiveOrg";
+import useFileHash from "../../../hooks/useFileHash";
 
 function Spinner() {
   return (
@@ -25,7 +26,7 @@ function Spinner() {
         d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
       />
     </svg>
-  )
+  );
 }
 
 function CheckIcon() {
@@ -42,45 +43,43 @@ function CheckIcon() {
         clipRule="evenodd"
       />
     </svg>
-  )
+  );
 }
 
 function PendingIcon() {
-  return (
-    <div className="h-5 w-5 rounded-full border-2 border-pyqp-border" />
-  )
+  return <div className="h-5 w-5 rounded-full border-2 border-pyqp-border" />;
 }
 
 function ChecklistItem({ label, status }) {
   return (
     <div className="flex items-center gap-3 py-2">
-      {status === 'done' && <CheckIcon />}
-      {status === 'running' && <Spinner />}
-      {status === 'pending' && <PendingIcon />}
+      {status === "done" && <CheckIcon />}
+      {status === "running" && <Spinner />}
+      {status === "pending" && <PendingIcon />}
       <span
         className={
-          status === 'done'
-            ? 'text-pyqp-text'
-            : status === 'running'
-              ? 'text-pyqp-text font-medium'
-              : 'text-pyqp-muted'
+          status === "done"
+            ? "text-pyqp-text"
+            : status === "running"
+              ? "text-pyqp-text font-medium"
+              : "text-pyqp-muted"
         }
       >
         {label}
       </span>
     </div>
-  )
+  );
 }
 
 function DuplicateCard({ item }) {
-  const identifier = item.identifier || ''
-  const title = item.title || item.description || identifier
-  const institution = item.creator || ''
-  const year = item.date || ''
-  const examType = item['exam-type'] || item.examType || ''
-  const thumbnailUrl = identifier ? buildThumbnailUrl(identifier) : null
-  const viewUrl = identifier ? buildItemUrl(identifier) : null
-  const [imgFailed, setImgFailed] = useState(false)
+  const identifier = item.identifier || "";
+  const title = item.title || item.description || identifier;
+  const institution = item.creator || "";
+  const year = item.date || "";
+  const examType = item["exam-type"] || item.examType || "";
+  const thumbnailUrl = identifier ? buildThumbnailUrl(identifier) : null;
+  const viewUrl = identifier ? buildItemUrl(identifier) : null;
+  const [imgFailed, setImgFailed] = useState(false);
 
   return (
     <div className="flex gap-4 items-start mt-4">
@@ -114,7 +113,7 @@ function DuplicateCard({ item }) {
           {title}
         </p>
         <p className="text-sm text-pyqp-text-light mt-1">
-          {[institution, year, examType].filter(Boolean).join(' \u00b7 ')}
+          {[institution, year, examType].filter(Boolean).join(" \u00b7 ")}
         </p>
         {viewUrl && (
           <a
@@ -140,69 +139,101 @@ function DuplicateCard({ item }) {
         )}
       </div>
     </div>
-  )
+  );
 }
 
 export default function StepDedupCheck() {
   const {
+    file,
     fileHash,
     identifier,
     setStep,
+    setFileHash,
     setDedupStatus,
     setDuplicateItem,
-  } = useWizardStore()
+  } = useWizardStore();
+
+  const { computeHash } = useFileHash();
 
   // Track individual layer statuses: 'pending' | 'running' | 'done'
-  const [layer1Status, setLayer1Status] = useState('pending')
-  const [layer2Status, setLayer2Status] = useState('pending')
+  // Layer 0 (hashing) gets its own status because without a hash, Layer 1
+  // would silently match every quarchive item (see lib/dedup.js guard).
+  const [hashStatus, setHashStatus] = useState("pending");
+  const [layer1Status, setLayer1Status] = useState("pending");
+  const [layer2Status, setLayer2Status] = useState("pending");
   // Overall check result: 'running' | 'clear' | 'duplicate'
-  const [checkState, setCheckState] = useState('running')
-  const [duplicateData, setDuplicateData] = useState(null)
+  const [checkState, setCheckState] = useState("running");
+  const [duplicateData, setDuplicateData] = useState(null);
 
   // Prevent double-run in React strict mode
-  const hasRun = useRef(false)
+  const hasRun = useRef(false);
 
   useEffect(() => {
-    if (hasRun.current) return
-    hasRun.current = true
+    if (hasRun.current) return;
+    hasRun.current = true;
 
-    setDedupStatus('checking')
+    setDedupStatus("checking");
 
     async function runChecks() {
+      // Layer 0: Compute SHA-256 of the file if not already done.
+      // This MUST complete before Layer 1 — an empty hash causes the
+      // Archive.org search to return arbitrary matches (false positives).
+      let hashHex = fileHash;
+      if (!hashHex && file) {
+        setHashStatus("running");
+        try {
+          hashHex = await computeHash(file);
+          setFileHash(hashHex);
+        } catch (err) {
+          console.error("Failed to compute file hash:", err);
+          // Continue without Layer 1 — Layer 2 (identifier) still catches
+          // the common case of re-uploading the same paper.
+        }
+      }
+      setHashStatus("done");
+
       // Layer 1: Hash check
-      setLayer1Status('running')
-      const l1 = await layer1HashCheck(fileHash)
-      setLayer1Status('done')
+      setLayer1Status("running");
+      const l1 = await layer1HashCheck(hashHex);
+      setLayer1Status("done");
 
       if (l1.isDuplicate) {
-        setDuplicateData(l1.item)
-        setDuplicateItem(l1.item)
-        setDedupStatus('duplicate')
-        setLayer2Status('done')
-        setCheckState('duplicate')
-        return
+        setDuplicateData(l1.item);
+        setDuplicateItem(l1.item);
+        setDedupStatus("duplicate");
+        setLayer2Status("done");
+        setCheckState("duplicate");
+        return;
       }
 
       // Layer 2: Identifier check
-      setLayer2Status('running')
-      const l2 = await layer2IdentifierCheck(identifier)
-      setLayer2Status('done')
+      setLayer2Status("running");
+      const l2 = await layer2IdentifierCheck(identifier);
+      setLayer2Status("done");
 
       if (l2.isDuplicate) {
-        setDuplicateData(l2.item)
-        setDuplicateItem(l2.item)
-        setDedupStatus('duplicate')
-        setCheckState('duplicate')
-        return
+        setDuplicateData(l2.item);
+        setDuplicateItem(l2.item);
+        setDedupStatus("duplicate");
+        setCheckState("duplicate");
+        return;
       }
 
       // All clear
-      setDedupStatus('clear')
-      setCheckState('clear')
+      setDedupStatus("clear");
+      setCheckState("clear");
     }
 
-    runChecks()
-  }, [fileHash, identifier, setDedupStatus, setDuplicateItem])
+    runChecks();
+  }, [
+    file,
+    fileHash,
+    identifier,
+    computeHash,
+    setFileHash,
+    setDedupStatus,
+    setDuplicateItem,
+  ]);
 
   return (
     <div className="space-y-6">
@@ -219,7 +250,7 @@ export default function StepDedupCheck() {
       <div className="bg-pyqp-card rounded-xl border border-pyqp-border p-5">
         <ChecklistItem
           label="Computing file fingerprint..."
-          status="done"
+          status={hashStatus}
         />
         <ChecklistItem
           label="Searching for matching files..."
@@ -232,7 +263,7 @@ export default function StepDedupCheck() {
       </div>
 
       {/* Result: Clear */}
-      {checkState === 'clear' && (
+      {checkState === "clear" && (
         <div className="bg-green-50 border border-green-200 rounded-xl p-5">
           <div className="flex items-center gap-2">
             <svg
@@ -255,7 +286,7 @@ export default function StepDedupCheck() {
       )}
 
       {/* Result: Duplicate */}
-      {checkState === 'duplicate' && duplicateData && (
+      {checkState === "duplicate" && duplicateData && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-5">
           <div className="flex items-center gap-2 mb-3">
             <svg
@@ -279,7 +310,7 @@ export default function StepDedupCheck() {
       )}
 
       {/* Actions */}
-      {checkState !== 'running' && (
+      {checkState !== "running" && (
         <div className="flex items-center justify-between pt-2">
           <button
             type="button"
@@ -301,7 +332,7 @@ export default function StepDedupCheck() {
             Edit Details
           </button>
 
-          {checkState === 'clear' && (
+          {checkState === "clear" && (
             <button
               type="button"
               onClick={() => setStep(3)}
@@ -323,7 +354,7 @@ export default function StepDedupCheck() {
             </button>
           )}
 
-          {checkState === 'duplicate' && (
+          {checkState === "duplicate" && (
             <p className="text-sm text-pyqp-muted">
               Thanks for trying to contribute!
             </p>
@@ -331,5 +362,5 @@ export default function StepDedupCheck() {
         </div>
       )}
     </div>
-  )
+  );
 }
