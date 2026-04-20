@@ -1,6 +1,20 @@
 import { useState, useCallback } from "react";
 import useCameraStore from "../../../store/cameraStore";
+import useToastStore from "../../../store/toastStore";
 import CropEditor from "./CropEditor";
+
+/**
+ * Human-readable labels for enhancement modes. Used by the busy /
+ * info toasts in `handleEnhanceMode` so the user sees "Applying Fast…"
+ * instead of "Applying fast…". Kept in one place so the PageReview
+ * toggle and the toast text never drift apart.
+ */
+const MODE_LABELS = {
+  fast: "Fast",
+  auto: "Auto",
+  bw: "B&W",
+  colour: "Colour",
+};
 
 /**
  * PageReview — Phase 8
@@ -30,6 +44,13 @@ export default function PageReview({ onConfirm, onRetake }) {
     cropEditing,
     setCropEditing,
   } = useCameraStore();
+  // Toast channel — used to surface "Applying <mode>…", "Opening editor…",
+  // "Saving crop…" so the user always knows when the heavier modes ('auto',
+  // 'bw') are running. 'fast' mode typically completes too quickly to need
+  // a toast, but we still show one for consistency — clearing a busy toast
+  // that never managed to render is a cheap no-op.
+  const pushToast = useToastStore((s) => s.pushToast);
+  const clearToast = useToastStore((s) => s.clearToast);
   const [currentIndex, setCurrentIndex] = useState(0);
   // Per-page re-enhance / re-warp state, keyed by page id, so a slow
   // operation on one page doesn't block the whole UI.
@@ -71,8 +92,7 @@ export default function PageReview({ onConfirm, onRetake }) {
   }, [currentIndex, total, capturedPages, reorderPages]);
 
   const handlePrev = () => setCurrentIndex((i) => Math.max(0, i - 1));
-  const handleNext = () =>
-    setCurrentIndex((i) => Math.min(total - 1, i + 1));
+  const handleNext = () => setCurrentIndex((i) => Math.min(total - 1, i + 1));
 
   /**
    * Re-run enhancement on the current page with a different mode.
@@ -88,13 +108,23 @@ export default function PageReview({ onConfirm, onRetake }) {
       // next fresh capture.
       if (!current.baseBlob) {
         updatePage(current.id, { enhanceMode: mode });
+        pushToast({
+          message: `${MODE_LABELS[mode] || mode} will apply to new captures`,
+          variant: "info",
+        });
         return;
       }
       setReprocessing((r) => ({ ...r, [current.id]: true }));
+      // Persistent "busy" toast for the duration of reprocessing. The
+      // heavier modes ('auto', 'bw') can take ~700–1200 ms on budget
+      // Android; without this the toggle feels unresponsive.
+      const busyToastId = pushToast({
+        message: `Applying ${MODE_LABELS[mode] || mode}…`,
+        variant: "busy",
+        duration: 0,
+      });
       try {
-        const { reprocessPage } = await import(
-          "../../../lib/capturePipeline"
-        );
+        const { reprocessPage } = await import("../../../lib/capturePipeline");
         const result = await reprocessPage(current.baseBlob, mode);
         // Free the old thumbnail URL before overwriting it.
         if (current.dataUrl && current.dataUrl.startsWith("blob:")) {
@@ -113,9 +143,15 @@ export default function PageReview({ onConfirm, onRetake }) {
         });
       } catch (err) {
         console.warn("[PageReview] reprocess failed:", err);
-        // Still flip the stored mode so the UI reflects intent.
+        // Still flip the stored mode so the UI reflects intent, and
+        // surface the failure rather than silently keeping the old image.
         updatePage(current.id, { enhanceMode: mode });
+        pushToast({
+          message: "Couldn't re-enhance that page — kept the previous version",
+          variant: "warn",
+        });
       } finally {
+        clearToast(busyToastId);
         setReprocessing((r) => {
           const next = { ...r };
           delete next[current.id];
@@ -123,7 +159,7 @@ export default function PageReview({ onConfirm, onRetake }) {
         });
       }
     },
-    [current, updatePage],
+    [current, updatePage, pushToast, clearToast],
   );
 
   /**
@@ -135,14 +171,29 @@ export default function PageReview({ onConfirm, onRetake }) {
     if (!current) return;
     const source = current.rawBlob || current.baseBlob || current.blob;
     if (!source) return;
+    // Decoding a high-res JPEG into an ImageBitmap can take a
+    // non-trivial tick on budget hardware; flash a "busy" toast so
+    // the user gets visible feedback during the tap → editor-opens
+    // round-trip.
+    const busyToastId = pushToast({
+      message: "Opening crop editor…",
+      variant: "busy",
+      duration: 0,
+    });
     try {
       const bitmap = await createImageBitmap(source);
       setEditorBitmap(bitmap);
       setCropEditing(current.id);
     } catch (err) {
       console.warn("[PageReview] couldn't open crop editor:", err);
+      pushToast({
+        message: "Couldn't open the crop editor for this page",
+        variant: "warn",
+      });
+    } finally {
+      clearToast(busyToastId);
     }
-  }, [current, setCropEditing]);
+  }, [current, setCropEditing, pushToast, clearToast]);
 
   const handleCloseEditor = useCallback(() => {
     setCropEditing(null);
@@ -173,14 +224,21 @@ export default function PageReview({ onConfirm, onRetake }) {
         return;
       }
       setReprocessing((r) => ({ ...r, [current.id]: true }));
+      // Warp + enhance on a full-resolution frame is the single most
+      // expensive operation in the whole camera flow (~1–2s on
+      // Snapdragon 6xx). A persistent busy toast is mandatory here.
+      const busyToastId = pushToast({
+        message: "Saving crop…",
+        variant: "busy",
+        duration: 0,
+      });
       try {
-        const { reprocessWithCorners } = await import(
-          "../../../lib/capturePipeline"
-        );
+        const { reprocessWithCorners } =
+          await import("../../../lib/capturePipeline");
         const result = await reprocessWithCorners(
           source,
           corners,
-          current.enhanceMode || "auto",
+          current.enhanceMode || "fast",
         );
         if (current.dataUrl && current.dataUrl.startsWith("blob:")) {
           try {
@@ -197,9 +255,19 @@ export default function PageReview({ onConfirm, onRetake }) {
           width: result.width,
           height: result.height,
         });
+        pushToast({
+          message: "Crop saved",
+          variant: "success",
+          duration: 1500,
+        });
       } catch (err) {
         console.warn("[PageReview] save corners failed:", err);
+        pushToast({
+          message: "Couldn't save the crop — kept the previous version",
+          variant: "warn",
+        });
       } finally {
+        clearToast(busyToastId);
         setReprocessing((r) => {
           const next = { ...r };
           delete next[current.id];
@@ -208,7 +276,7 @@ export default function PageReview({ onConfirm, onRetake }) {
         handleCloseEditor();
       }
     },
-    [current, updatePage, handleCloseEditor],
+    [current, updatePage, handleCloseEditor, pushToast, clearToast],
   );
 
   if (total === 0) {
@@ -228,7 +296,12 @@ export default function PageReview({ onConfirm, onRetake }) {
 
   const isEditing = cropEditing === current?.id && !!editorBitmap;
   const isBusy = current ? !!reprocessing[current.id] : false;
-  const enhanceMode = current?.enhanceMode || "auto";
+  // Default to 'fast' when a page has no explicit enhanceMode set —
+  // matches the new store default (CLAUDE.md §5A / ROADMAP Phase 8.3
+  // follow-up on budget-device performance). 'fast' is a cheap single-
+  // pass RGBA contrast stretch; 'auto' / 'bw' remain available below
+  // for users who explicitly opt into the heavier pipeline.
+  const enhanceMode = current?.enhanceMode || "fast";
   const canAdjust = !!(current && (current.rawBlob || current.baseBlob));
 
   // ── CropEditor overlay ────────────────────────────────────────────
@@ -434,7 +507,6 @@ export default function PageReview({ onConfirm, onRetake }) {
         </div>
       )}
 
-
       {/* Phase 8: Adjust edges + Enhancement mode toggle */}
       <div className="px-4 py-2 border-t border-pyqp-border flex flex-wrap items-center gap-2">
         <button
@@ -466,6 +538,13 @@ export default function PageReview({ onConfirm, onRetake }) {
           className="ml-auto inline-flex rounded-lg border border-pyqp-border overflow-hidden"
         >
           {[
+            // Ordered cheapest → heaviest so the default ('fast') is
+            // the first thing users see. 'Auto' is still offered but
+            // it's opt-in now — on a Snapdragon-6xx-class phone the
+            // full Sauvola + median + greyscale-contrast pipeline can
+            // push a single page past 1s, which felt sluggish in
+            // practice. See lib/paperEnhance.js for the mode matrix.
+            { value: "fast", label: "Fast" },
             { value: "auto", label: "Auto" },
             { value: "bw", label: "B&W" },
             { value: "colour", label: "Colour" },

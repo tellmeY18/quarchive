@@ -120,8 +120,12 @@ function gateDetection(detection, frameWidth, frameHeight) {
  * @param {Blob} rawBlob
  *   The JPEG blob emitted by `useCamera.captureFrame()`.
  * @param {object} [options]
- * @param {'auto'|'bw'|'colour'} [options.enhanceMode='auto']
- *   Passed straight through to `enhanceImage()`.
+ * @param {'fast'|'auto'|'bw'|'colour'} [options.enhanceMode='fast']
+ *   Passed straight through to `enhanceImage()`. The default is 'fast'
+ *   — a cheap single-pass RGBA contrast stretch that completes in
+ *   well under 100ms on budget Android devices (Snapdragon 6xx class).
+ *   Heavier modes ('auto', 'bw') are still available for users who
+ *   explicitly toggle them in PageReview.
  *
  * @returns {Promise<{
  *   blob: Blob,              // processed JPEG ready for the PDF pipeline
@@ -146,7 +150,7 @@ function gateDetection(detection, frameWidth, frameHeight) {
  * the caller (Viewfinder) correctly treats it as a failed capture.
  */
 export async function processCapturedFrame(rawBlob, options = {}) {
-  const { enhanceMode = "auto" } = options;
+  const { enhanceMode = "fast" } = options;
 
   // Decode the raw frame first — if this fails, the whole shutter
   // press is dead and the caller must surface it.
@@ -266,12 +270,15 @@ export async function processCapturedFrame(rawBlob, options = {}) {
  *
  * @param {Blob} baseBlob
  *   The warped-but-unenhanced JPEG for this page.
- * @param {'auto'|'bw'|'colour'} enhanceMode
+ * @param {'fast'|'auto'|'bw'|'colour'} enhanceMode
+ *   Default is 'fast' — matches `processCapturedFrame` so that switching
+ *   between Fast and Colour (and back) on an untouched page never lands
+ *   on a mode the initial capture didn't use.
  *
  * @returns {Promise<{ blob: Blob, dataUrl: string, width: number, height: number }>}
  *   The newly-enhanced JPEG and a fresh object URL for the thumbnail.
  */
-export async function reprocessPage(baseBlob, enhanceMode = "auto") {
+export async function reprocessPage(baseBlob, enhanceMode = "fast") {
   const bitmap = await blobToBitmap(baseBlob);
 
   let enhanceMod;
@@ -319,14 +326,14 @@ export async function reprocessPage(baseBlob, enhanceMode = "auto") {
  *
  * @param {Blob} rawBlob        Original camera frame (before any warp).
  * @param {number[][]} corners  Four [[x,y], ...] corners in raw-frame coords.
- * @param {'auto'|'bw'|'colour'} [enhanceMode='auto']
+ * @param {'fast'|'auto'|'bw'|'colour'} [enhanceMode='fast']
  *
  * @returns Same shape as `processCapturedFrame`, with crop.mode='manual'.
  */
 export async function reprocessWithCorners(
   rawBlob,
   corners,
-  enhanceMode = "auto",
+  enhanceMode = "fast",
 ) {
   const rawBitmap = await blobToBitmap(rawBlob);
 

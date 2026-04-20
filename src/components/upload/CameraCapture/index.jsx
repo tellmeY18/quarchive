@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import useCameraStore from "../../../store/cameraStore";
+import useToastStore from "../../../store/toastStore";
 import useImageToPdf from "../../../hooks/useImageToPdf";
 import Viewfinder from "./Viewfinder";
 import PageReview from "./PageReview";
@@ -9,6 +10,14 @@ export default function CameraCapture({ onComplete, onCancel }) {
   const [phase, setPhase] = useState("capture");
   const { capturedPages, pdfBlob, reset, cameraError } = useCameraStore();
   const { convert } = useImageToPdf();
+  // Toast channel for the transitions this component owns — mainly the
+  // PDF-assembly step, which can take multiple seconds on budget Android
+  // for a 5-page scan. The inline "Creating PDF..." overlay in PdfPreview
+  // still handles the primary visual; the toast exists as a secondary,
+  // persistent cue so the user knows we haven't frozen even if the
+  // spinner momentarily stalls on a slow pdf-lib encode.
+  const pushToast = useToastStore((s) => s.pushToast);
+  const clearToast = useToastStore((s) => s.clearToast);
 
   useEffect(() => {
     return () => {
@@ -29,9 +38,41 @@ export default function CameraCapture({ onComplete, onCancel }) {
   const handleReviewConfirm = useCallback(async () => {
     setPhase("review");
     const blobs = capturedPages.map((p) => p.blob);
-    await convert(blobs);
-    setPhase("preview");
-  }, [capturedPages, convert]);
+    // Persistent busy toast spans the full pdf-lib + compression run.
+    // Scales the message with page count so users with 5+ pages get
+    // a clearer expectation than a generic spinner.
+    const pageCount = blobs.length;
+    const busyToastId = pushToast({
+      message:
+        pageCount > 1
+          ? `Creating PDF from ${pageCount} pages…`
+          : "Creating PDF…",
+      variant: "busy",
+      duration: 0,
+    });
+    try {
+      await convert(blobs);
+      pushToast({
+        message: "PDF ready",
+        variant: "success",
+        duration: 1500,
+      });
+      setPhase("preview");
+    } catch (err) {
+      // PDF assembly is the last step before upload — a failure here
+      // leaves the user with nothing unless we tell them. Dump them
+      // back to the review screen so they can retry without re-capturing.
+      console.warn("[CameraCapture] PDF assembly failed:", err);
+      pushToast({
+        message: "Couldn't create the PDF — please try again",
+        variant: "error",
+        duration: 4000,
+      });
+      setPhase("review");
+    } finally {
+      clearToast(busyToastId);
+    }
+  }, [capturedPages, convert, pushToast, clearToast]);
 
   const handleReviewRetake = useCallback(() => {
     setPhase("capture");

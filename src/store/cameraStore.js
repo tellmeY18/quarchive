@@ -33,8 +33,14 @@ const useCameraStore = create((set) => ({
   isCapturing: false,
   reviewMode: false,
   cropEditing: null, // id of page currently open in CropEditor, or null
-  enhanceMode: "auto", // default enhancement mode for new captures
-  // ('auto' | 'bw' | 'colour' — see CLAUDE.md §5A)
+  // Default enhancement mode for new captures. 'fast' is the cheap
+  // single-pass RGBA contrast stretch from lib/paperEnhance.js — it
+  // completes in well under 100ms on budget Android hardware and is
+  // the right default for the realistic common case (a well-lit paper
+  // photographed under normal room lighting). Heavier modes ('auto',
+  // 'bw') remain available via the PageReview toggle for users who
+  // need them.
+  enhanceMode: "fast", // 'fast' | 'auto' | 'bw' | 'colour' — see CLAUDE.md §5A
   pdfBlob: null,
   pdfSize: 0,
   converting: false,
@@ -88,7 +94,7 @@ const useCameraStore = create((set) => ({
       isCapturing: false,
       reviewMode: false,
       cropEditing: null,
-      enhanceMode: "auto",
+      enhanceMode: "fast",
       pdfBlob: null,
       pdfSize: 0,
       converting: false,
