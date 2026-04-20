@@ -84,38 +84,16 @@ async function handleInit(vendorPath) {
 }
 
 /**
- * Run OCR on the first N pages of a PDF.
+ * Shared post-import OCR logic.
  *
- * Strategy:
- *  1. Import the PDF via scribe.importFiles({ pdfFiles: [arrayBuffer] }).
- *  2. Call scribe.recognize({ mode: 'speed', langs: [language] }) — 'speed'
- *     mode is the right default for best-effort metadata prefill (we're
- *     looking for a course code, not publishing a searchable PDF).
- *  3. Export plain text for pages [0, maxPages-1] and return it.
- *
- * All scribe APIs are used through optional-chaining guards: older scribe.js
- * versions drop or rename methods occasionally, and Phase 8 must degrade
- * gracefully rather than crash the upload flow (CLAUDE.md invariant 14).
+ * Called after either `pdfFiles` or `imageFiles` have been handed to
+ * scribe.importFiles. Runs recognise + exportData and returns the
+ * extracted text. Split out from `handleOcr` / `handleOcrImage` so the
+ * two input paths stay in sync without duplicating the recognise /
+ * export dance (scribe's exact API surface drifts between versions,
+ * and we want to audit those calls in one place).
  */
-async function handleOcr({ pdfBuffer, maxPages = 2, language = "eng" }) {
-  if (!scribe) {
-    throw new Error("scribe not initialised");
-  }
-
-  // Clear any state left over from a previous OCR run so successive
-  // uploads don't bleed text into each other.
-  if (typeof scribe.clear === "function") {
-    try {
-      await scribe.clear();
-    } catch {
-      // Non-fatal; proceed with whatever state scribe has.
-    }
-  }
-
-  // Import the PDF. scribe.importFiles is happy with an ArrayBuffer in the
-  // `pdfFiles` array when we pre-sort the input ourselves (docs: SortedInputFiles).
-  await scribe.importFiles({ pdfFiles: [pdfBuffer] });
-
+async function runRecognizeAndExport({ maxPages, language }) {
   // Recognise. 'speed' ≈ lstm-only; sufficient for headline-sized course
   // codes which is all Phase 8 cares about.
   await scribe.recognize({ langs: [language], mode: "speed" });
@@ -149,6 +127,90 @@ async function handleOcr({ pdfBuffer, maxPages = 2, language = "eng" }) {
 }
 
 /**
+ * Clear any state left over from a previous OCR run so successive
+ * uploads / captures don't bleed text into each other. Non-fatal.
+ */
+async function clearScribeState() {
+  if (typeof scribe.clear === "function") {
+    try {
+      await scribe.clear();
+    } catch {
+      // Non-fatal; proceed with whatever state scribe has.
+    }
+  }
+}
+
+/**
+ * Run OCR on the first N pages of a PDF.
+ *
+ * Strategy:
+ *  1. Import the PDF via scribe.importFiles({ pdfFiles: [arrayBuffer] }).
+ *  2. Call scribe.recognize({ mode: 'speed', langs: [language] }) — 'speed'
+ *     mode is the right default for best-effort metadata prefill (we're
+ *     looking for a course code, not publishing a searchable PDF).
+ *  3. Export plain text for pages [0, maxPages-1] and return it.
+ *
+ * All scribe APIs are used through optional-chaining guards: older scribe.js
+ * versions drop or rename methods occasionally, and Phase 8 must degrade
+ * gracefully rather than crash the upload flow (CLAUDE.md invariant 14).
+ */
+async function handleOcr({ pdfBuffer, maxPages = 2, language = "eng" }) {
+  if (!scribe) {
+    throw new Error("scribe not initialised");
+  }
+
+  await clearScribeState();
+
+  // Import the PDF. scribe.importFiles is happy with an ArrayBuffer in the
+  // `pdfFiles` array when we pre-sort the input ourselves (docs: SortedInputFiles).
+  await scribe.importFiles({ pdfFiles: [pdfBuffer] });
+
+  return runRecognizeAndExport({ maxPages, language });
+}
+
+/**
+ * Run OCR directly on one or more raw image buffers (typically the
+ * first JPEG emitted by the camera shutter).
+ *
+ * This path exists because extracting metadata from a single captured
+ * image is dramatically cheaper than waiting for the full multi-page
+ * PDF assembly to finish. The camera flow kicks this off from the
+ * first shutter press, so by the time the user has finished capturing
+ * and reaches StepMetadata, suggestions are usually already populated.
+ *
+ * scribe.js treats each image buffer as its own page. We only ever
+ * pass one or two images here — the first captured page is the
+ * overwhelmingly common case, and the first page is where the course
+ * code / institution / exam type live on a real-world question paper.
+ */
+async function handleOcrImage({
+  imageBuffers,
+  imageType = "image/jpeg",
+  maxPages = 1,
+  language = "eng",
+}) {
+  if (!scribe) {
+    throw new Error("scribe not initialised");
+  }
+  if (!Array.isArray(imageBuffers) || imageBuffers.length === 0) {
+    throw new Error("no image buffers supplied");
+  }
+
+  await clearScribeState();
+
+  // scribe's importFiles accepts `imageFiles: Array<ArrayBuffer>`.
+  // We hand it the raw ArrayBuffers directly — same shape as the PDF
+  // path — so there's no File/Blob wrapping overhead on the way in.
+  // The MIME type hint is not required by scribe but we keep it on
+  // the message for forward-compatibility with libraries that sniff.
+  void imageType;
+
+  await scribe.importFiles({ imageFiles: imageBuffers });
+
+  return runRecognizeAndExport({ maxPages, language });
+}
+
+/**
  * Top-level message router. Every incoming message resolves to exactly one
  * outgoing message so the main thread's `addEventListener('message', ...)`
  * promise-handlers in scribeClient.js always settle.
@@ -174,6 +236,29 @@ self.addEventListener("message", async (event) => {
         maxPages: data.maxPages,
         language: data.language,
       });
+      self.postMessage({ type: "ocr-result", id, text, layout });
+    } catch (err) {
+      self.postMessage({
+        type: "ocr-error",
+        id,
+        error: err && err.message ? err.message : String(err),
+      });
+    }
+    return;
+  }
+
+  if (data.type === "ocr-image") {
+    const { id } = data;
+    try {
+      const { text, layout } = await handleOcrImage({
+        imageBuffers: data.imageBuffers,
+        imageType: data.imageType,
+        maxPages: data.maxPages,
+        language: data.language,
+      });
+      // Re-use the same result envelope shape as the PDF path so the
+      // main-thread router in scribeClient.js doesn't need to know
+      // which input type produced the result.
       self.postMessage({ type: "ocr-result", id, text, layout });
     } catch (err) {
       self.postMessage({

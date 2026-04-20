@@ -233,6 +233,90 @@ export async function ocrFirstPages(pdfBlob, options = {}) {
 }
 
 /**
+ * Run OCR directly on one or more raw image blobs.
+ *
+ * This is the preferred path for the camera flow — we feed the first
+ * captured JPEG straight into scribe.js's `imageFiles` importer, which
+ * skips PDF rasterisation entirely. Compared to `ocrFirstPages`:
+ *
+ *   - No PDF assembly wait (pdf-lib takes ~1–3s on budget Android).
+ *   - No mupdf rasterisation pass inside scribe.
+ *   - OCR can start the moment the shutter fires, in parallel with
+ *     the user capturing additional pages.
+ *
+ * On a typical first page of a question paper (course code, title,
+ * exam type all in the header region), the returned text is more than
+ * enough for `metadataExtract.js` — we never needed multi-page
+ * synthesis for metadata prefill anyway.
+ *
+ * @param {Blob|Blob[]} imageBlobs - one or more image Blobs (JPEG/PNG).
+ *   A single Blob is accepted for convenience and wrapped internally.
+ * @param {object} [options]
+ * @param {number} [options.maxPages=1]  How many image pages to OCR.
+ *   Default 1 because the camera flow feeds the FIRST captured page
+ *   only — that's where the metadata lives.
+ * @param {string} [options.language='eng']  Tesseract language code.
+ * @param {number} [options.timeout=15000]  Hard budget, same as the
+ *   PDF path (CLAUDE.md §21 invariant 14).
+ *
+ * @returns {Promise<{ text: string, layout: object }>}
+ */
+export async function ocrFirstImage(imageBlobs, options = {}) {
+  const { maxPages = 1, language = "eng", timeout = 15000 } = options;
+
+  if (!ocrWorker || initState !== "ready") {
+    throw new Error("OCR worker not initialised");
+  }
+
+  // Accept either a single Blob or an array for ergonomic callers.
+  const blobs = Array.isArray(imageBlobs) ? imageBlobs : [imageBlobs];
+  if (blobs.length === 0) {
+    throw new Error("no image blobs supplied");
+  }
+
+  // Read every Blob into an ArrayBuffer on the main thread so we can
+  // transfer them zero-copy into the worker. The MIME type of the
+  // first blob is forwarded as a hint for libraries that sniff; scribe
+  // itself auto-detects from the buffer header.
+  const imageBuffers = await Promise.all(blobs.map((b) => b.arrayBuffer()));
+  const imageType = blobs[0]?.type || "image/jpeg";
+
+  const id = nextRequestId++;
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      if (pendingOcr.has(id)) {
+        pendingOcr.delete(id);
+        reject(new Error("OCR timeout"));
+      }
+    }, timeout);
+
+    pendingOcr.set(id, { resolve, reject, timeoutId });
+
+    try {
+      // Transfer every ArrayBuffer — they're all unusable on the main
+      // thread after this call, which is fine because we only needed
+      // them long enough to postMessage them across.
+      ocrWorker.postMessage(
+        {
+          type: "ocr-image",
+          id,
+          imageBuffers,
+          imageType,
+          maxPages,
+          language,
+        },
+        imageBuffers,
+      );
+    } catch (err) {
+      pendingOcr.delete(id);
+      clearTimeout(timeoutId);
+      reject(err);
+    }
+  });
+}
+
+/**
  * Tear down the worker. Called from `useOcrPrefill.js` cleanup / on
  * route change away from the upload wizard. Safe to call when the
  * worker was never initialised.

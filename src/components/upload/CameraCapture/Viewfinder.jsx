@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback } from "react";
 import useCamera from "../../../hooks/useCamera";
 import useCameraStore from "../../../store/cameraStore";
 import useToastStore from "../../../store/toastStore";
+import { runOcrOnImage } from "../../../hooks/useOcrPrefill";
 
 /**
  * Viewfinder — Phase 8 + mobile-feedback revamp
@@ -126,6 +127,15 @@ export default function Viewfinder({ onDone }) {
     // detect+warp gone (see capturePipeline.js) and the enhance pass
     // scheduled off the critical path, the shutter returns in under
     // ~150ms on the same devices.
+    //
+    // This handler also kicks off OCR on the FIRST captured page
+    // (see `runOcrOnImage` below). Running OCR against the raw JPEG
+    // is dramatically cheaper than waiting for PDF assembly +
+    // rasterisation — by the time the user finishes capturing and
+    // reaches StepMetadata, the ✨ suggestion pills are usually
+    // already populated.
+    const isFirstPage = capturedPages.length === 0;
+
     let rawBlob;
     try {
       rawBlob = await captureFrame();
@@ -194,7 +204,38 @@ export default function Viewfinder({ onDone }) {
       // bothering the user.
       console.warn("[Viewfinder] background enhance failed:", err);
     }
-  }, [capturing, cameraReady, captureFrame, addPage, enhanceMode, pushToast]);
+
+    // ── OCR kickoff (first page only) ─────────────────────────────
+    // Fire-and-forget. We deliberately do NOT await this — OCR takes
+    // several seconds even in 'speed' mode, and we don't want to hold
+    // up any subsequent capture or navigation. `runOcrOnImage` writes
+    // straight into wizardStore.ocrSuggestions when it finishes, and
+    // `useOcrPrefill` checks that status before starting its own PDF
+    // fallback, so we never double-run.
+    //
+    // We pass the RAW frame (not the enhanced one) because:
+    //   1. It's available ~immediately — no wait on the enhance pass.
+    //   2. scribe.js does its own binarisation internally, so heavy
+    //      pre-enhancement (Sauvola etc.) tends to HURT OCR accuracy
+    //      more than it helps.
+    // Statically imported — `useOcrPrefill` is already pulled in by
+    // StepMetadata's main-chunk import, so a dynamic import here can't
+    // split the chunk (Vite warns about the ineffective dynamic import)
+    // and only adds a pointless microtask on the capture hot path.
+    if (isFirstPage) {
+      Promise.resolve(runOcrOnImage(rawBlob)).catch((err) => {
+        console.warn("[Viewfinder] OCR kickoff failed:", err);
+      });
+    }
+  }, [
+    capturing,
+    cameraReady,
+    capturedPages.length,
+    captureFrame,
+    addPage,
+    enhanceMode,
+    pushToast,
+  ]);
 
   // Tap-to-focus. Wired onto the video element's click handler below.
   // We draw the ring indicator at the tap point regardless of whether
