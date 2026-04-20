@@ -1,0 +1,7 @@
+# Ignore all scribe.js binary assets copied by postinstall.
+# These are regenerated from node_modules/scribe.js-ocr/ on every `npm install`
+# by scripts/copy-scribe-assets.mjs — there is no reason to track them in git.
+*
+!.gitignore
+!README.md
+!.quarchive-vendor

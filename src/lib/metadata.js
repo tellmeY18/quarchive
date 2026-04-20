@@ -25,7 +25,23 @@ export function buildIdentifier({ wikidataQid, courseCode, year, examType }) {
   return `quarchive--${wikidataQid}--${slug}--${year}--${examType}`;
 }
 
-export function buildMetaHeaders(metadata, fileHash) {
+/**
+ * Build the metadata header map sent to Archive.org as x-archive-meta-*.
+ *
+ * @param {object} metadata   Wizard metadata state (see wizardStore.js).
+ * @param {string} fileHash   SHA-256 of the file being uploaded.
+ * @param {object} [options]
+ * @param {string} [options.source]
+ *   Tracks upload method — 'camera-scan' | 'pdf-upload'. Serialised as
+ *   the `source` custom field on the Archive.org item (CLAUDE.md §11).
+ * @param {object} [options.ocrAccepted]
+ *   Map of `{ fieldName: true }` for each OCR suggestion the user
+ *   accepted. Phase 8 (CLAUDE.md §11 `ocr-assist` row): emit a comma-
+ *   separated list of accepted fields, or `none` if OCR didn't
+ *   contribute. No analytics tie this back to a user beyond the
+ *   Archive.org uploader identity.
+ */
+export function buildMetaHeaders(metadata, fileHash, options = {}) {
   const {
     institution,
     program,
@@ -38,6 +54,8 @@ export function buildMetaHeaders(metadata, fileHash) {
     language,
   } = metadata;
 
+  const { source, ocrAccepted } = options;
+
   const parts = [program, courseName, courseCode ? `(${courseCode})` : ""]
     .filter(Boolean)
     .join(" - ");
@@ -45,7 +63,20 @@ export function buildMetaHeaders(metadata, fileHash) {
     .replace(/\s+/g, " ")
     .trim();
 
-  return {
+  // Phase 8 `ocr-assist` field. Stable alphabetical ordering so two
+  // uploads that accepted the same set of suggestions produce an
+  // identical header (easier to aggregate later without telemetry).
+  let ocrAssist = "none";
+  if (ocrAccepted && typeof ocrAccepted === "object") {
+    const accepted = Object.keys(ocrAccepted)
+      .filter((k) => ocrAccepted[k])
+      .sort();
+    if (accepted.length > 0) {
+      ocrAssist = accepted.join(",");
+    }
+  }
+
+  const headers = {
     title: `${courseName || courseCode || "Question Paper"} - ${institution.label} - ${year}`,
     description,
     creator: institution.label,
@@ -57,7 +88,14 @@ export function buildMetaHeaders(metadata, fileHash) {
     semester: semester,
     "exam-type": examType,
     sha256: fileHash,
+    "ocr-assist": ocrAssist,
   };
+
+  if (source) {
+    headers.source = source;
+  }
+
+  return headers;
 }
 
 export function validateMetadata(metadata, file) {

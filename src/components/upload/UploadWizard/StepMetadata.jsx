@@ -5,7 +5,9 @@ import {
   validateMetadata,
   validatePdfMagic,
 } from "../../../lib/metadata";
+import { normaliseCourseCodeForSlug } from "../../../lib/metadataExtract";
 import InstitutionSearch from "../InstitutionSearch";
+import { useOcrPrefill } from "../../../hooks/useOcrPrefill";
 
 const CURRENT_YEAR = new Date().getFullYear();
 
@@ -65,20 +67,38 @@ const LANGUAGES = [
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
 export default function StepMetadata() {
-  const { metadata, file, setMetadata, setFile, setIdentifier, setStep } =
-    useWizardStore();
+  const {
+    metadata,
+    file,
+    pdfBlob,
+    ocrStatus,
+    ocrSuggestions,
+    ocrDismissed,
+    setMetadata,
+    setFile,
+    setIdentifier,
+    setStep,
+    dismissOcrSuggestion,
+    acceptOcrSuggestion,
+  } = useWizardStore();
   const [errors, setErrors] = useState([]);
   const [fileError, setFileError] = useState(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Compute identifier preview live
+  // Trigger OCR when PDF is ready (Phase 8)
+  useOcrPrefill(pdfBlob, true);
+
+  // Compute identifier preview live (with normalization)
   const identifierPreview =
     metadata.institution?.qid && metadata.year && metadata.examType
       ? buildIdentifier({
           wikidataQid: metadata.institution.qid,
-          courseCode: metadata.courseCode || metadata.courseName || "paper",
+          courseCode:
+            normaliseCourseCodeForSlug(metadata.courseCode) ||
+            metadata.courseName ||
+            "paper",
           year: metadata.year,
           examType: metadata.examType,
         })
@@ -182,10 +202,13 @@ export default function StepMetadata() {
         }
       }
 
-      // Compute identifier and advance
+      // Compute identifier and advance (with normalization)
       const identifier = buildIdentifier({
         wikidataQid: metadata.institution.qid,
-        courseCode: metadata.courseCode || metadata.courseName || "paper",
+        courseCode:
+          normaliseCourseCodeForSlug(metadata.courseCode) ||
+          metadata.courseName ||
+          "paper",
         year: metadata.year,
         examType: metadata.examType,
       });
@@ -247,7 +270,39 @@ export default function StepMetadata() {
         <div>
           <label htmlFor="meta-course-name" className={labelClasses}>
             Course Name
+            {ocrStatus === "running" && (
+              <span className="ml-2 inline-flex items-center gap-1 text-xs font-normal text-blue-600">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+                ✨ Reading paper…
+              </span>
+            )}
           </label>
+          {/* Phase 8: OCR Suggestion Pill */}
+          {ocrSuggestions.courseName &&
+            !ocrDismissed.courseName &&
+            !metadata.courseName && (
+              <div className="mb-2 flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-xs">
+                <span className="text-blue-600">✨ Suggested:</span>
+                <span className="font-medium text-blue-900">
+                  {ocrSuggestions.courseName}
+                </span>
+                <button
+                  onClick={() => {
+                    setMetadata("courseName", ocrSuggestions.courseName);
+                    acceptOcrSuggestion("courseName");
+                  }}
+                  className="ml-auto rounded px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-100"
+                >
+                  Use
+                </button>
+                <button
+                  onClick={() => dismissOcrSuggestion("courseName")}
+                  className="rounded px-1.5 py-1 text-blue-400 hover:text-blue-600"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
           <input
             id="meta-course-name"
             type="text"
@@ -264,6 +319,32 @@ export default function StepMetadata() {
             Course Code{" "}
             <span className="text-pyqp-muted font-normal">(optional)</span>
           </label>
+          {/* Phase 8: OCR Suggestion Pill */}
+          {ocrSuggestions.courseCode &&
+            !ocrDismissed.courseCode &&
+            !metadata.courseCode && (
+              <div className="mb-2 flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-xs">
+                <span className="text-blue-600">✨ Suggested:</span>
+                <span className="font-medium text-blue-900">
+                  {ocrSuggestions.courseCode}
+                </span>
+                <button
+                  onClick={() => {
+                    setMetadata("courseCode", ocrSuggestions.courseCode);
+                    acceptOcrSuggestion("courseCode");
+                  }}
+                  className="ml-auto rounded px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-100"
+                >
+                  Use
+                </button>
+                <button
+                  onClick={() => dismissOcrSuggestion("courseCode")}
+                  className="rounded px-1.5 py-1 text-blue-400 hover:text-blue-600"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
           <input
             id="meta-course-code"
             type="text"
@@ -419,6 +500,36 @@ export default function StepMetadata() {
             <legend className={labelClasses}>
               Exam Type <span className="text-red-500">*</span>
             </legend>
+            {/* Phase 8: OCR Suggestion Pill */}
+            {ocrSuggestions.examType &&
+              !ocrDismissed.examType &&
+              !metadata.examType && (
+                <div className="mb-3 flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-xs">
+                  <span className="text-blue-600">✨ Suggested:</span>
+                  <span className="font-medium text-blue-900">
+                    {
+                      EXAM_TYPES.find(
+                        (t) => t.value === ocrSuggestions.examType,
+                      )?.label
+                    }
+                  </span>
+                  <button
+                    onClick={() => {
+                      setMetadata("examType", ocrSuggestions.examType);
+                      acceptOcrSuggestion("examType");
+                    }}
+                    className="ml-auto rounded px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-100"
+                  >
+                    Use
+                  </button>
+                  <button
+                    onClick={() => dismissOcrSuggestion("examType")}
+                    className="rounded px-1.5 py-1 text-blue-400 hover:text-blue-600"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
             <div className="flex flex-wrap gap-4 mt-1">
               {EXAM_TYPES.map((type) => (
                 <label

@@ -67,6 +67,9 @@ The visual design is inspired by **https://gpura.org** (Kerala Digital Archive /
 | HTTP | Native `fetch` | No axios; keep bundle lean |
 | **Image → PDF** | **`pdf-lib` + `browser-image-compression`** | Client-side only; no server; converts captured photos to a single PDF |
 | **Camera capture** | **`mediaDevices.getUserMedia` / `<input capture="environment">`** | Native browser API; no library needed; falls back to file picker on desktop |
+| **Edge detection + perspective warp** ★ Phase 8 | **OpenCV.js (WASM) _or_ pure-canvas Sobel/Hough (decided during 8.1 spike)** | Detects the paper quad in each captured frame, warps it to a clean rectangle — no squished/trapezoidal pages. Dynamic import only. |
+| **Image enhancement** ★ Phase 8 | **Pure-canvas pipeline in `lib/paperEnhance.js`** | Greyscale → Sauvola-style adaptive threshold → gentle contrast stretch. Colour-preserving by default. Runs in `OffscreenCanvas`. |
+| **On-device OCR** ★ Phase 8 | **`scribe.js-ocr`** | Runs Tesseract-backed OCR inside a Web Worker on the first 1–2 PDF pages to extract `courseName` / `courseCode` / `examType` suggestions. **AGPL-3.0** — credited in `About.jsx`. All WASM + language data served from `public/vendor/scribe/` (same-origin requirement). |
 | PDF preview | `pdfjs-dist` | Lazy-loaded only on paper detail pages |
 | Fonts | `@fontsource` packages | Self-hosted; no Google Fonts CDN dependency |
 
@@ -131,14 +134,21 @@ pyqp/
 │   │   ├── useWikidataLookup.js
 │   │   ├── useFileHash.js
 │   │   ├── useUpload.js
-│   │   ├── useCamera.js             ← getUserMedia, torch, orientation ★ NEW
-│   │   └── useImageToPdf.js         ← pdf-lib image assembly + compression ★ NEW
+│   │   ├── useCamera.js             ← getUserMedia, torch, orientation
+│   │   ├── useImageToPdf.js         ← pdf-lib image assembly + compression
+│   │   └── useOcrPrefill.js         ← Scribe.js OCR on first 1–2 pages ★ Phase 8
 │   ├── lib/
 │   │   ├── archiveOrg.js
 │   │   ├── wikidata.js              ← Institution data via Wikidata SPARQL (no local seed file)
 │   │   ├── dedup.js
 │   │   ├── metadata.js
-│   │   └── imageToPdf.js            ← Core conversion logic (pdf-lib) ★ NEW
+│   │   ├── imageToPdf.js            ← Core conversion logic (pdf-lib)
+│   │   ├── documentDetect.js        ← Paper-quad detection (edge detection) ★ Phase 8
+│   │   ├── perspectiveWarp.js       ← Warp detected quad to clean rectangle ★ Phase 8
+│   │   ├── paperEnhance.js          ← Adaptive threshold + contrast pipeline ★ Phase 8
+│   │   ├── capturePipeline.js       ← Orchestrates detect → warp → enhance per shutter press ★ Phase 8
+│   │   ├── scribeClient.js          ← Thin wrapper around scribe.js-ocr ★ Phase 8
+│   │   └── metadataExtract.js       ← OCR text → { courseName, courseCode, examType } ★ Phase 8
 │   ├── pages/
 │   │   ├── Home.jsx
 │   │   ├── Upload.jsx
@@ -148,7 +158,10 @@ pyqp/
 │   ├── store/
 │   │   ├── authStore.js
 │   │   ├── wizardStore.js
-│   │   └── cameraStore.js           ← Captured pages state ★ NEW
+│   │   └── cameraStore.js           ← Captured pages + crop/enhance state
+│   ├── workers/
+│   │   ├── hashWorker.js
+│   │   └── ocrWorker.js             ← Dedicated worker hosting scribe.js ★ Phase 8
 │   └── styles/
 │       └── index.css
 ├── functions/
@@ -156,6 +169,10 @@ pyqp/
 │       ├── login.js
 │       ├── s3keys.js
 │       └── upload.js
+├── public/
+│   └── vendor/
+│       └── scribe/                  ← scribe.js WASM + language data ★ Phase 8
+│                                      (copied here by postinstall; served same-origin)
 ├── vite.config.js
 └── package.json
 ```
@@ -320,12 +337,179 @@ export async function imagesToPdf(imageBlobs, onProgress) {
 
 ---
 
+## 5A. Capture Robustness Pipeline ★ Phase 8
+
+> After a frame is captured from the camera but **before** it is added to the thumbnail tray, the frame passes through a three-stage pipeline: **detect → warp → enhance**. Every stage is optional and falls back gracefully.
+
+### Stage 1 — `lib/documentDetect.js` (Edge Detection)
+
+**Purpose:** Find the four corners of the paper in the captured frame.
+
+```
+detectPaperQuad(imageBitmap) →
+  { corners: [tl, tr, br, bl], confidence: 0..1 } | null
+```
+
+Implementation choice is finalised during Phase 8.1 spike:
+- **Option A — OpenCV.js (WASM):** robust contour detection + `approxPolyDP`. ~9MB WASM, dynamic-imported only when camera opens.
+- **Option B — Pure-canvas Sobel + Hough line detection:** ~20KB, less robust on cluttered backgrounds but zero WASM cost.
+
+**Invariants:**
+1. Returns `null` when `confidence < 0.6` OR when the quad area is < 60% of the frame area. The caller (Viewfinder) must treat `null` as "keep the raw frame, let the user adjust manually later".
+2. **Never silently warps a bad quad.** A squished PDF is worse than an uncropped one.
+
+### Stage 2 — `lib/perspectiveWarp.js` (Perspective Correction)
+
+**Purpose:** Given the four corners, produce a rectangular image.
+
+```
+warpToRect(imageBitmap, quad, targetSize) → ImageBitmap
+```
+
+- `targetSize` defaults to A4 proportions at 2480×1754 (300dpi equivalent, re-sampled down later by `browser-image-compression`).
+- Uses a standard 3×3 homography matrix. Computed in pure JS; warping itself uses OpenCV.js `warpPerspective` if loaded, else a hand-rolled bilinear sampler on `OffscreenCanvas`.
+- Aspect-ratio invariant: if the corner geometry implies a ratio wildly different from A4 (e.g. landscape photograph of a square flyer), the target size is recomputed from the quad's actual implied ratio — **never forced to A4**.
+
+### Stage 3 — `lib/paperEnhance.js` (Readability Enhancement)
+
+**Purpose:** Make the text crisper, flatten uneven lighting, preserve colour where meaningful.
+
+Pipeline (pure-canvas, `OffscreenCanvas`):
+1. **Greyscale-only probe copy** for analysis — perceptual weights 0.299R + 0.587G + 0.114B.
+2. **Skip-early gate:** if Laplacian variance of the probe exceeds a threshold (image is already sharp and evenly lit), return the input unchanged. Over-processing is the #1 way enhancement makes papers less readable.
+3. **Sauvola-style adaptive threshold** with window 25px, k=0.2 — flattens uneven lighting.
+4. **Optional 3×3 median filter** — only when noise variance on the probe is above threshold.
+5. **Contrast stretch** — remap so true-black text → 0, paper background → ~240 (not 255; preserves texture and annotations).
+
+**User-facing toggle** in `PageReview`:
+- `Auto` (default) — the pipeline above.
+- `B&W document` — force full binarisation (for dark scans / dot-matrix printouts).
+- `Colour original` — skip all enhancement (preserve coloured diagrams, stamps, highlighter).
+
+**Performance budget:** capture → warp → enhance for one page must complete in **< 1.5s on mid-range Android** (Snapdragon 6xx class). All image data stays in `ImageBitmap` / `OffscreenCanvas` — no DOM `<img>` round-trips on the hot path.
+
+### Manual Crop — `CropEditor.jsx`
+
+When auto-detection is wrong (or refused), the user taps "Adjust edges" on any thumbnail in `PageReview`. The editor shows:
+- The raw captured frame with four draggable corner handles (each handle ≥ 44×44px — mobile-first tap target invariant).
+- Handles snap to high-gradient edges when within 20px (gentle assist, never forced — the user can drag anywhere).
+- A live-updating preview pane below the editor showing the warped-and-enhanced result (≤ 100ms update).
+- `Reset to auto` / `Reset to full frame` buttons — always recoverable.
+
+Per-page crop state is held in `cameraStore.capturedPages[i].crop` as `{ corners: [...], mode: 'auto' | 'manual' | 'none' }` and persists across navigation within the upload flow.
+
+---
+
+## 5B. OCR-Assisted Metadata Prefill ★ Phase 8
+
+> Once the PDF is assembled in `PdfPreview`, we kick off OCR in a Web Worker on the first 1–2 pages. By the time the user reaches `StepMetadata`, suggestions for `courseName`, `courseCode`, and `examType` are typically ready.
+
+### Architecture
+
+```
+PdfPreview (PDF assembled)
+     │
+     ├──▶ useOcrPrefill() triggers ocrWorker.js
+     │         │
+     │         └──▶ scribe.js-ocr (Tesseract inside)
+     │                     │
+     │                     └──▶ text + layout returned
+     │
+     └──▶ wizardStore.ocrSuggestions populated
+                   │
+                   └──▶ StepMetadata renders ✨ Suggestion pills
+```
+
+### `lib/scribeClient.js`
+
+```javascript
+// Lazy init. Points scribe at same-origin vendor assets.
+await initScribe({ vendorPath: '/vendor/scribe/' })
+
+// Extract text from first N pages of a PDF Blob.
+const { text, layout } = await ocrFirstPages(pdfBlob, {
+  maxPages: 2,
+  language: 'eng',
+})
+```
+
+**Rules:**
+1. `scribe.js-ocr` is loaded only inside `src/workers/ocrWorker.js` — **never** imported by the main bundle.
+2. All scribe runtime assets (WASM, `eng.traineddata` / `eng_fast.traineddata`, fonts) are copied from `node_modules` into `public/vendor/scribe/` by a `postinstall` script. This is required because scribe.js in the browser **must** be served same-origin — loading from a CDN is explicitly unsupported by its authors.
+3. A single scribe worker instance is reused for all pages of one PDF; it is terminated when the upload wizard unmounts.
+4. **OCR budget: 15s total.** If exceeded, abort gracefully and show no suggestions — never block the upload flow.
+5. **Silent failure.** If scribe fails to init (low-memory kill on iOS, missing WASM, etc.), log once to console and continue. Users who never saw OCR suggestions should not see an error either.
+
+### `lib/metadataExtract.js`
+
+Pure function; no I/O. Pairs well with unit tests in Node.
+
+```
+extractFromOcr(text) → {
+  suggestions: { courseName?, courseCode?, examType?, year?, month? },
+  confidence:  { courseName: 0..1, courseCode: 0..1, examType: 0..1, ... },
+}
+```
+
+#### `courseCode` — extraction rules
+
+Target pattern: `[A-Z]{2,4}[ -]?\d{3,4}[A-Z]?` (matches `CS301`, `CS 301`, `CS-301`, `MA1011`, `ECE202A`, `BT-204`).
+
+**Scoring** (highest wins):
+- Label-adjacent (`Course Code`, `Subject Code`, `Paper Code`, `Code No`) → **+3**
+- Parenthesised, right after a probable course name line → **+2**
+- Standalone in header region (top 25% of page 1) → **+1**
+
+Ties broken by position: nearer to page top wins (course codes are typically in the header).
+
+**Normalisation (applied before the value leaves `metadataExtract`):**
+1. `.trim()`
+2. `.toUpperCase()`
+3. Collapse internal whitespace and hyphens: `"CS 301"` / `"cs-301"` → `"CS301"`.
+
+The normalised string is what populates `metadata.courseCode` AND what feeds the slug in `buildIdentifier`. This is what guarantees an OCR-suggested code and a manually-typed `"  cs 301  "` produce **byte-identical** identifiers.
+
+#### `courseName` — extraction rules
+
+- Line immediately above or below the chosen course code, OR a line starting with `Subject:` / `Paper:` / `Course:`.
+- Strip trailing punctuation; collapse internal whitespace.
+- **Reject** if length < 3 or > 120 chars.
+- **Reject** if < 50% of characters are letters (filters out `"Time: 3 Hours, Max Marks: 100"`).
+- **Do not auto Title-Case** — preserve source casing (`"B.Tech Data Structures"` stays as-is).
+
+#### `examType` — keyword detection → canonical value
+
+Match case-insensitively with `\b` word boundaries. First match wins using this priority order (most specific first):
+
+| Canonical value | Keyword regex (case-insensitive) |
+|---|---|
+| `supplementary` | `supplementary` \| `supply exam` \| `supple` |
+| `improvement` | `improvement` \| `betterment` |
+| `model` | `model( question)? paper` \| `model exam` \| `mock` |
+| `end-semester` | `end[- ]?semester` \| `semester end` \| `end sem` \| `ese` |
+| `midsemester` | `mid[- ]?semester` \| `mid[- ]?sem` \| `mse` \| `internal assessment` |
+| `make-up` | `make[- ]?up` \| `makeup exam` |
+| `re-exam` | `re[- ]?exam` \| `re[- ]?test` \| `re[- ]?appear` |
+| `save-a-year` | `save[- ]?a[- ]?year` \| `say exam` |
+| `main` | `regular` \| `main exam` \| `end of semester` *(only if no stronger match)* |
+
+If no keyword matches, `examType` is left empty — **never guess**.
+
+### `StepMetadata` Integration — Suggestions, Not Auto-Fill
+
+1. **Suggestion chips above each affected field:** `✨ Suggested: CS301 — Use?` with accept (✓) and dismiss (✕) controls.
+2. **If a field is already non-empty**, the pill is shown but the field value is NOT overwritten. User agency is preserved.
+3. **Slug-safety final check:** when `StepMetadata` builds the preview identifier, it runs the same `trim → toUpperCase → collapse whitespace/hyphens` normalisation on `courseCode` as `extractFromOcr` did. This is the last gate before identifier construction.
+4. **No telemetry.** Whether the user accepted or edited a suggestion is local state only; never transmitted.
+
+---
+
 ## 6. Upload Wizard — Updated Step Flow
 
 ```
 Step 0 — Source Selection  (StepSource.jsx)      ★ NEW FIRST STEP
 Step 1 — Capture / File    (Camera or fallback)
-Step 2 — Metadata Form     (StepMetadata.jsx)
+Step 2 — Metadata Form     (StepMetadata.jsx)    ← OCR suggestions appear here ★ Phase 8
 Step 3 — Duplicate Check   (StepDedupCheck.jsx)
 Step 4 — Upload            (StepUpload.jsx)
 ```
@@ -363,13 +547,18 @@ On mobile, fields are stacked full-width, inputs are tall (44px+), and the keybo
 
 ---
 
-## 7. Zustand State — `cameraStore.js` ★ NEW
+## 7. Zustand State — `cameraStore.js`
 
 ```javascript
 {
-  capturedPages: [],     // Array of { id, blob, dataUrl, timestamp }
+  capturedPages: [],     // Array of {
+                         //   id, blob, dataUrl, timestamp,
+                         //   crop: { corners, mode: 'auto'|'manual'|'none' }, ★ Phase 8
+                         //   enhanceMode: 'auto'|'bw'|'colour',               ★ Phase 8
+                         // }
   isCapturing: false,    // Camera UI open
   reviewMode: false,     // PageReview screen open
+  cropEditing: null,     // id of page currently in CropEditor, or null        ★ Phase 8
   pdfBlob: null,         // Assembled PDF blob (post-conversion)
   pdfSize: 0,            // Bytes
   converting: false,     // image→PDF in progress
@@ -397,6 +586,25 @@ On mobile, fields are stacked full-width, inputs are tall (44px+), and the keybo
     semester: '',
     language: 'en',
   },
+  // ★ Phase 8 — OCR-assisted prefill
+  ocrStatus: 'idle',        // 'idle' | 'running' | 'done' | 'failed'
+  ocrSuggestions: {         // Populated by useOcrPrefill after scribe.js finishes
+    courseName: null,       //   string | null
+    courseCode: null,       //   string | null (already normalised)
+    examType: null,         //   one of the 9 canonical values | null
+    year: null,
+    month: null,
+  },
+  ocrDismissed: {},         // { [fieldName]: true } — user dismissed the pill
+  ocrAccepted: {},          // { [fieldName]: true } — user tapped "Use" on a ✨ pill.
+                            //   Serialised at upload time into the `ocr-assist`
+                            //   Archive.org metadata header as a sorted, comma-
+                            //   separated list of field names (or `none`).
+                            //   Local-only state; never transmitted as telemetry.
+  pdfBlob: null,            // Set by Upload.jsx once the camera/PDF source has
+                            //   produced a Blob. Drives useOcrPrefill — OCR only
+                            //   runs once this is populated.
+  // ★ end Phase 8
   file: null,               // Final PDF File object (from camera OR upload)
   fileHash: '',
   identifier: '',
@@ -526,9 +734,10 @@ Examples:
 | Content hash | `sha256` | `a3f9...` | Web Crypto client-side |
 | Exam type | `exam-type` | `supplementary` | Custom field |
 | Semester | `semester` | `4` | Custom field |
-| Course code | `course-code` | `CS301` | Custom field |
+| Course code | `course-code` | `CS301` | Custom field — always normalised (uppercase, no whitespace/hyphens) before identifier construction |
 | Degree/program | `program` | `B.Sc Computer Science` | Custom field |
-| **Source** | **`source`** | **`camera-scan`** / `pdf-upload` | **★ NEW — tracks upload method** |
+| **Source** | **`source`** | **`camera-scan`** / `pdf-upload` | Tracks upload method |
+| **OCR assist** ★ Phase 8 | `ocr-assist` | `courseCode,examType` \| `none` | Comma-separated list of fields populated via OCR suggestion. For analytics-free visibility into how much OCR helped per item — never tied to user identity beyond the Archive.org uploader. |
 
 ---
 
@@ -624,9 +833,13 @@ Mission, how-to (including camera scan flow), open source links.
 | SHA-256 hashing | Files > 10MB → Web Worker |
 | **Image compression** | **`browser-image-compression` with `useWebWorker: true`** |
 | **pdf-lib** | **Lazy-import on capture flow only — do not bundle into main chunk** |
+| **Edge-detection lib (OpenCV.js or fallback)** ★ Phase 8 | **Dynamic import only; loaded when camera opens, never before** |
+| **`scribe.js-ocr`** ★ Phase 8 | **Loaded only inside `ocrWorker.js`, never by the main bundle. Runtime assets served from `/vendor/scribe/` (same-origin, HTTP-cacheable).** |
+| **OCR budget** ★ Phase 8 | **15s hard cap per upload. Exceeded → abort silently, no suggestions.** |
+| **Capture pipeline per page** ★ Phase 8 | **Detect + warp + enhance < 1.5s on mid-range Android (Snapdragon 6xx).** |
 | **Camera stream** | **Stop stream immediately on unmount — never leave open in background** |
 | Stats strip | Fetch once on app load, cache in component state |
-| **Initial JS bundle** | **Keep < 150KB gzipped. Camera and pdf-lib are dynamic imports.** |
+| **Initial JS bundle** | **Keep < 150KB gzipped. Camera, pdf-lib, edge-detection, and scribe.js are all dynamic imports. Phase 8 must not grow the main chunk by more than 5KB gzipped.** |
 
 ---
 
@@ -678,6 +891,13 @@ npm run build
 9. **Always stop the camera MediaStream on unmount** — leaving it open drains battery and keeps the camera indicator light on.
 10. **Camera is always the default on mobile** — never show the file picker first.
 11. **Image-to-PDF conversion is always client-side** — never send raw images to any server.
+12. **OCR is always client-side** ★ Phase 8 — scribe.js runs in a Web Worker on the user's device. No page image, raw text, or extracted field ever leaves the browser.
+13. **OCR never silently auto-fills** ★ Phase 8 — suggestions appear as dismissible pills. A field the user has already typed into is never overwritten.
+14. **OCR never blocks the upload flow** ★ Phase 8 — if scribe.js fails or exceeds the 15s budget, the wizard proceeds without suggestions.
+15. **`courseCode` is normalised at every entry point** ★ Phase 8 — `trim() → toUpperCase() → collapse whitespace & hyphens`. Whether the value came from OCR, manual typing, or session restore, the resulting identifier slug must be byte-identical.
+16. **Auto-crop never distorts aspect ratio** ★ Phase 8 — if the detected quad has confidence < 0.6 or area < 60% of the frame, fall back to the raw frame. A squished PDF is worse than an uncropped one.
+17. **Enhancement is reversible per page** ★ Phase 8 — the original warped (or raw) ImageBitmap is kept in memory until the PDF is committed, so the user can switch enhancement modes in `PageReview` without re-capturing.
+18. **Third-party WASM / model assets are served same-origin** ★ Phase 8 — scribe.js WASM, Tesseract language data, and any edge-detection WASM live under `public/vendor/…`. No CDN dependency on the upload path.
 
 ---
 

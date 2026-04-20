@@ -5,7 +5,7 @@ import useCameraStore from "../../../store/cameraStore";
 export default function Viewfinder({ onDone }) {
   const videoRef = useRef(null);
   const { startCamera, captureFrame, toggleTorch, stopCamera } = useCamera();
-  const { capturedPages, addPage } = useCameraStore();
+  const { capturedPages, addPage, enhanceMode } = useCameraStore();
   const [torchOn, setTorchOn] = useState(false);
   const [torchSupported, setTorchSupported] = useState(false);
   const [capturing, setCapturing] = useState(false);
@@ -37,20 +37,60 @@ export default function Viewfinder({ onDone }) {
     if (capturing) return;
     setCapturing(true);
     try {
-      const blob = await captureFrame();
-      if (blob) {
-        const dataUrl = URL.createObjectURL(blob);
+      const rawBlob = await captureFrame();
+      if (!rawBlob) return;
+
+      const id = Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+      const timestamp = Date.now();
+
+      // Phase 8 (CLAUDE.md §5A): run the detect → warp → enhance pipeline
+      // on the captured frame. The pipeline is dynamic-imported on the
+      // first shutter press so none of these libraries ship in the main
+      // bundle. All three stages fall back gracefully to the previous
+      // stage's output on failure — processCapturedFrame only rejects if
+      // the raw blob itself cannot be decoded.
+      try {
+        const { processCapturedFrame } =
+          await import("../../../lib/capturePipeline");
+        const processed = await processCapturedFrame(rawBlob, {
+          enhanceMode,
+        });
         addPage({
-          id: Date.now() + "-" + Math.random().toString(36).slice(2, 7),
-          blob,
+          id,
+          blob: processed.blob,
+          dataUrl: processed.dataUrl,
+          timestamp,
+          // Phase 8 extensions — see cameraStore.js for the full shape.
+          baseBlob: processed.baseBlob,
+          rawBlob, // kept for manual crop re-warp from original corners
+          crop: processed.crop,
+          enhanceMode,
+          width: processed.width,
+          height: processed.height,
+        });
+      } catch (err) {
+        // Pipeline couldn't even decode the raw frame, OR the dynamic
+        // import failed catastrophically. Fall back to the legacy
+        // behaviour so the user's capture isn't lost (invariant #16 —
+        // "a squished PDF is worse than an uncropped one"; by extension,
+        // a raw frame is better than no frame at all).
+        console.warn("[Viewfinder] capture pipeline failed:", err);
+        const dataUrl = URL.createObjectURL(rawBlob);
+        addPage({
+          id,
+          blob: rawBlob,
           dataUrl,
-          timestamp: Date.now(),
+          timestamp,
+          baseBlob: rawBlob,
+          rawBlob,
+          crop: { corners: null, mode: "none", confidence: null },
+          enhanceMode,
         });
       }
     } finally {
       setCapturing(false);
     }
-  }, [capturing, captureFrame, addPage]);
+  }, [capturing, captureFrame, addPage, enhanceMode]);
 
   const handleTorch = useCallback(async () => {
     const next = !torchOn;

@@ -35,6 +35,22 @@ const initialState = {
     semester: "",
     language: "en",
   },
+  // Phase 8: OCR-assisted prefill
+  ocrStatus: "idle", // 'idle' | 'running' | 'done' | 'failed'
+  ocrSuggestions: {
+    courseName: null,
+    courseCode: null,
+    examType: null,
+    year: null,
+    month: null,
+  },
+  ocrDismissed: {}, // { [fieldName]: true } for dismissed suggestions
+  ocrAccepted: {}, // { [fieldName]: true } — user tapped "Use" on a suggestion.
+  // Drives the `ocr-assist` metadata header emitted at upload
+  // time (CLAUDE.md §11) so we have per-item visibility into
+  // how much OCR actually helped, without any analytics.
+  pdfBlob: null, // Set from camera or file upload, used for OCR
+  // end Phase 8
   file: null,
   fileHash: "",
   identifier: "",
@@ -56,7 +72,43 @@ const useWizardStore = create((set) => ({
       metadata: { ...state.metadata, [field]: value },
     })),
 
+  // Phase 8: OCR state management
+  setOcrStatus: (status) => set({ ocrStatus: status }),
+
+  setOcrSuggestions: (suggestions) => set({ ocrSuggestions: suggestions }),
+
+  dismissOcrSuggestion: (fieldName) =>
+    set((state) => ({
+      ocrDismissed: { ...state.ocrDismissed, [fieldName]: true },
+    })),
+
+  // Record that the user accepted an OCR suggestion for `fieldName`.
+  // Called by StepMetadata when the user taps "Use" on a ✨ pill. This
+  // is local-only state; it's read at upload time to build the
+  // `ocr-assist` metadata header and never transmitted as telemetry.
+  acceptOcrSuggestion: (fieldName) =>
+    set((state) => ({
+      ocrAccepted: { ...state.ocrAccepted, [fieldName]: true },
+    })),
+
+  resetOcr: () =>
+    set({
+      ocrStatus: "idle",
+      ocrSuggestions: {
+        courseName: null,
+        courseCode: null,
+        examType: null,
+        year: null,
+        month: null,
+      },
+      ocrDismissed: {},
+      ocrAccepted: {},
+    }),
+  // end Phase 8
+
   setFile: (file) => set({ file }),
+
+  setPdfBlob: (blob) => set({ pdfBlob: blob }),
 
   setFileHash: (hash) => set({ fileHash: hash }),
 

@@ -1,38 +1,38 @@
-import { useEffect, useCallback, useRef } from 'react'
-import useWizardStore from '../../../store/wizardStore'
-import useAuthStore from '../../../store/authStore'
-import { buildItemUrl } from '../../../lib/archiveOrg'
-import { buildMetaHeaders } from '../../../lib/metadata'
+import { useEffect, useCallback, useRef } from "react";
+import useWizardStore from "../../../store/wizardStore";
+import useAuthStore from "../../../store/authStore";
+import { buildItemUrl } from "../../../lib/archiveOrg";
+import { buildMetaHeaders } from "../../../lib/metadata";
 
 function formatFileSize(bytes) {
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 }
-
 
 const ERROR_MESSAGES = {
   session_expired: {
-    title: 'Session Expired',
-    message: 'Your Archive.org session expired. Please sign in again.',
-    icon: 'lock',
+    title: "Session Expired",
+    message: "Your Archive.org session expired. Please sign in again.",
+    icon: "lock",
   },
   slow_down: {
-    title: 'Server Busy',
-    message: 'Archive.org is busy. Please wait a moment and try again.',
-    icon: 'clock',
+    title: "Server Busy",
+    message: "Archive.org is busy. Please wait a moment and try again.",
+    icon: "clock",
   },
   network: {
-    title: 'Connection Failed',
-    message: 'Connection failed. Check your internet and try again.',
-    icon: 'wifi',
+    title: "Connection Failed",
+    message: "Connection failed. Check your internet and try again.",
+    icon: "wifi",
   },
   rejected: {
-    title: 'File Rejected',
-    message: 'Archive.org rejected this file. Ensure it is a valid PDF and try again.',
-    icon: 'alert',
+    title: "File Rejected",
+    message:
+      "Archive.org rejected this file. Ensure it is a valid PDF and try again.",
+    icon: "alert",
   },
-}
+};
 
 export default function StepUpload() {
   const {
@@ -40,68 +40,87 @@ export default function StepUpload() {
     fileHash,
     identifier,
     metadata,
+    source,
+    ocrAccepted,
     uploadStatus,
     uploadError,
     setUploadStatus,
     setUploadError,
     setStep,
     resetWizard,
-  } = useWizardStore()
+  } = useWizardStore();
 
-  const { accessKey, secretKey } = useAuthStore()
+  const { accessKey, secretKey } = useAuthStore();
 
   // Prevent double-upload in React strict mode
-  const hasStarted = useRef(false)
+  const hasStarted = useRef(false);
 
   const doUpload = useCallback(async () => {
-    setUploadStatus('uploading')
-    setUploadError(null)
+    setUploadStatus("uploading");
+    setUploadError(null);
 
     try {
-      const meta = buildMetaHeaders(metadata, fileHash)
+      // Phase 8: pass `source` (camera-scan | pdf-upload) and the set
+      // of OCR-accepted fields through to the metadata builder so the
+      // Archive.org item records how it was created (CLAUDE.md §11).
+      const meta = buildMetaHeaders(metadata, fileHash, {
+        source,
+        ocrAccepted,
+      });
 
-      const formData = new FormData()
-      formData.append('accessKey', accessKey)
-      formData.append('secretKey', secretKey)
-      formData.append('identifier', identifier)
-      formData.append('file', file)
-      formData.append('meta', JSON.stringify(meta))
+      const formData = new FormData();
+      formData.append("accessKey", accessKey);
+      formData.append("secretKey", secretKey);
+      formData.append("identifier", identifier);
+      formData.append("file", file);
+      formData.append("meta", JSON.stringify(meta));
 
-      const response = await fetch('/api/upload', {
-        method: 'POST',
+      const response = await fetch("/api/upload", {
+        method: "POST",
         body: formData,
-      })
+      });
 
       if (response.ok) {
-        setUploadStatus('success')
+        setUploadStatus("success");
       } else if (response.status === 401) {
-        setUploadError('session_expired')
-        setUploadStatus('error')
+        setUploadError("session_expired");
+        setUploadStatus("error");
       } else if (response.status === 503) {
-        setUploadError('slow_down')
-        setUploadStatus('error')
+        setUploadError("slow_down");
+        setUploadStatus("error");
       } else {
-        setUploadError('rejected')
-        setUploadStatus('error')
+        setUploadError("rejected");
+        setUploadStatus("error");
       }
     } catch {
-      setUploadError('network')
-      setUploadStatus('error')
+      setUploadError("network");
+      setUploadStatus("error");
     }
-  }, [file, fileHash, identifier, metadata, accessKey, secretKey, setUploadStatus, setUploadError])
+  }, [
+    file,
+    fileHash,
+    identifier,
+    metadata,
+    source,
+    ocrAccepted,
+    accessKey,
+    secretKey,
+    setUploadStatus,
+    setUploadError,
+  ]);
 
   useEffect(() => {
-    if (hasStarted.current) return
-    hasStarted.current = true
-    doUpload()
-  }, [doUpload])
+    if (hasStarted.current) return;
+    hasStarted.current = true;
+    doUpload();
+  }, [doUpload]);
 
   const handleRetry = () => {
-    doUpload()
-  }
+    doUpload();
+  };
 
   // --- Uploading state ---
-  if (uploadStatus === 'uploading') {
+  if (uploadStatus === "uploading") {
     return (
       <div className="space-y-6">
         <div>
@@ -118,16 +137,14 @@ export default function StepUpload() {
               viewBox="0 0 20 20"
               fill="currentColor"
             >
-              <path
-                d="M3 3.5A1.5 1.5 0 014.5 2h6.879a1.5 1.5 0 011.06.44l4.122 4.12A1.5 1.5 0 0117 7.622V16.5a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 013 16.5v-13z"
-              />
+              <path d="M3 3.5A1.5 1.5 0 014.5 2h6.879a1.5 1.5 0 011.06.44l4.122 4.12A1.5 1.5 0 0117 7.622V16.5a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 013 16.5v-13z" />
             </svg>
             <div className="min-w-0">
               <p className="text-sm font-medium text-pyqp-text truncate">
-                {file?.name || 'document.pdf'}
+                {file?.name || "document.pdf"}
               </p>
               <p className="text-xs text-pyqp-muted">
-                {file ? formatFileSize(file.size) : ''}
+                {file ? formatFileSize(file.size) : ""}
               </p>
             </div>
           </div>
@@ -142,12 +159,12 @@ export default function StepUpload() {
           </p>
         </div>
       </div>
-    )
+    );
   }
 
   // --- Success state ---
-  if (uploadStatus === 'success') {
-    const itemUrl = buildItemUrl(identifier)
+  if (uploadStatus === "success") {
+    const itemUrl = buildItemUrl(identifier);
 
     return (
       <div className="space-y-6">
@@ -213,17 +230,18 @@ export default function StepUpload() {
           </div>
 
           <p className="text-xs text-green-600 mt-5">
-            Archive.org will process the PDF for full-text search and page-by-page preview within a few hours.
+            Archive.org will process the PDF for full-text search and
+            page-by-page preview within a few hours.
           </p>
         </div>
       </div>
-    )
+    );
   }
 
   // --- Error state ---
-  if (uploadStatus === 'error') {
-    const errorInfo = ERROR_MESSAGES[uploadError] || ERROR_MESSAGES.rejected
-    const canRetry = uploadError === 'slow_down' || uploadError === 'network'
+  if (uploadStatus === "error") {
+    const errorInfo = ERROR_MESSAGES[uploadError] || ERROR_MESSAGES.rejected;
+    const canRetry = uploadError === "slow_down" || uploadError === "network";
 
     return (
       <div className="space-y-6">
@@ -246,9 +264,7 @@ export default function StepUpload() {
             </h2>
           </div>
 
-          <p className="text-sm text-red-700">
-            {errorInfo.message}
-          </p>
+          <p className="text-sm text-red-700">{errorInfo.message}</p>
 
           <div className="flex flex-wrap gap-3 mt-5">
             {canRetry && (
@@ -273,7 +289,7 @@ export default function StepUpload() {
               </button>
             )}
 
-            {uploadError === 'rejected' && (
+            {uploadError === "rejected" && (
               <button
                 type="button"
                 onClick={() => setStep(1)}
@@ -295,7 +311,7 @@ export default function StepUpload() {
               </button>
             )}
 
-            {uploadError === 'session_expired' && (
+            {uploadError === "session_expired" && (
               <p className="text-sm text-red-600 self-center">
                 Please close this wizard and sign in again.
               </p>
@@ -303,9 +319,9 @@ export default function StepUpload() {
           </div>
         </div>
       </div>
-    )
+    );
   }
 
   // Fallback (should not reach here)
-  return null
+  return null;
 }

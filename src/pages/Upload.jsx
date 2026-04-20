@@ -19,6 +19,7 @@ export default function Upload() {
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn)
   const setFile = useWizardStore((s) => s.setFile)
   const setSource = useWizardStore((s) => s.setSource)
+  const setPdfBlob = useWizardStore((s) => s.setPdfBlob)
 
   const [cameraAvailable] = useState(() => hasCamera())
   const [mobile] = useState(() => isMobile())
@@ -35,10 +36,11 @@ export default function Upload() {
     // Convert blob to File for upload
     const file = new File([pdfBlob], 'scanned-paper.pdf', { type: 'application/pdf' })
     setFile(file)
+    setPdfBlob(pdfBlob) // Phase 8: for OCR prefill
     setSource('camera')
     setShowCamera(false)
     useCameraStore.getState().reset()
-  }, [setFile, setSource])
+  }, [setFile, setPdfBlob, setSource])
 
   const handleCameraCancel = useCallback(() => {
     setShowCamera(false)
