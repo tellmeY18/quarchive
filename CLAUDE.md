@@ -930,16 +930,13 @@ Testing the "Scan Paper" flow is the most complex part of the suite.
 
 ## 24. Open Questions / Future Work
 
-- [ ] Verify exact CORS behavior of `archive.org/services/xauthn/?op=login` when proxied through Cloudflare Workers — test first
-- [ ] Handle Archive.org accounts with 2FA (show graceful fallback to manual key entry)
-- [ ] GitHub Action to refresh Wikidata SPARQL cache periodically
-- [ ] Evaluate `advancedsearch.php` rate limits under real traffic
-- [ ] Auto-detect paper orientation and rotate pages before PDF assembly
-- [ ] Edge detection / document crop using canvas (help users frame papers accurately)
-- [ ] "Papers near your university" via OpenStreetMap Nominatim
-- [ ] PWA with offline access to previously viewed papers + background upload queue
-- [ ] Malayalam / regional language UI localisation
-- [ ] Handle poor lighting: suggest torch, show exposure feedback in viewfinder
+Active backlog items from this section are now tracked as GitHub issues — see https://github.com/tellmeY18/quarchive/issues. This file no longer maintains a duplicate checklist; keep new open-ended ideas in issues (or in `ROADMAP.md` when they belong to a sequenced phase).
+
+Historical notes:
+
+- **xauthn CORS behaviour** — verified in Phase 2 and shipped (`functions/api/login.js`). No follow-up required.
+- **Edge detection / document crop using canvas** — shipped in Phase 8 (`lib/documentDetect.js`, `lib/perspectiveWarp.js`, `components/upload/CameraCapture/CropEditor.jsx`).
+- **Wikidata cache GitHub Action** — superseded by the v5 mwapi-backed search; no pre-seeded cache is needed.
 
 ---
 
