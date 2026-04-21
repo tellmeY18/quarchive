@@ -504,6 +504,348 @@ If no keyword matches, `examType` is left empty — **never guess**.
 
 ---
 
+## 5C. Bulk Upload Flow ★ Phase 9A
+
+> **The multi-file sibling of the single-file PDF upload fallback.** PDF-only — no camera capture, no image-to-PDF conversion. A contributor selects multiple local PDFs, OCR runs automatically in the background on each one, and a single review screen lets them confirm or edit per-file metadata before one "Upload All" action sends everything to Archive.org.
+
+### When to Use This vs. the Single-File Wizard
+
+| | Single-file wizard | Bulk upload |
+|---|---|---|
+| Primary input | Camera scan (mobile) or one PDF | 2–50 PDFs from device storage |
+| Metadata UX | Full-screen step-by-step | Compact per-file rows on one screen |
+| OCR scope | First 2 pages | First page only |
+| OCR concurrency | Runs immediately after assembly | Serial — one file at a time |
+| Dedup UX | Blocking inline at Step 3 | Non-blocking per-row badge |
+| Session persistence | `wizardStore` (Zustand, in-memory) | `bulkStore` (Zustand, in-memory) |
+| Best suited for | Scanning a paper in hand; donating one PDF | Donating a collection of pre-scanned PDFs |
+| Primary device | Mobile (camera) / any (PDF fallback) | Desktop (multi-file picker) |
+
+### Entry Points
+
+- **`StepSource.jsx`** (desktop / camera-denied): a tertiary "📦 Bulk upload PDFs" option appears below the single-PDF option. Routes to `/upload/bulk`.
+- **Direct URL** `/upload/bulk`: unauthenticated users are redirected to login and returned to this route after.
+- **Mobile guard**: on screens narrower than `md` (768 px), the bulk page shows a dismissible "This feature works best on a computer" notice but does **not** block access — a user with PDFs on their phone can still proceed.
+
+### User Journey — Happy Path
+
+```
+Contributor has a set of pre-scanned PDFs on their laptop
+  │
+  └── Navigates to /upload/bulk (from StepSource or direct URL)
+        │
+        └── BulkFilePicker: drag-drop zone + "Select PDFs" button
+              │
+              └── Selects multiple PDFs → files appear in BulkQueue
+                    │
+                    ├── Institution picker (shared, required) at top of screen
+                    │
+                    ├── For each file, in the background (serial):
+                    │     1. First page renders as thumbnail (pdfjs-dist, lazy)
+                    │     2. SHA-256 hash computed via hashWorker.js
+                    │     3. OCR runs (first page, 8 s timeout) via ocrWorker.js
+                    │     4. ocrSuggestions populated → suggestion pills appear on row
+                    │
+                    ├── User reviews queue rows:
+                    │     ✅ OCR got it right → accept pills → row turns "Ready"
+                    │     ⚠ Missing fields → user fills inline → row turns "Ready"
+                    │     🗑 Wrong file → tap ✕ to remove from queue
+                    │
+                    ├── "Upload N Ready files" CTA activates (≥ 1 Ready + logged in)
+                    │
+                    └── User taps Upload:
+                          ├── Dedup layer 2 check per file (parallel across batch)
+                          ├── Max 3 simultaneous IAS3 PUTs
+                          ├── Per-file progress bars
+                          └── Final summary: "8 uploaded · 1 duplicate skipped · 0 failed"
+```
+
+### Screen Layout — Desktop
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  ← Back     Bulk Upload                                               │
+│──────────────────────────────────────────────────────────────────────│
+│                                                                       │
+│  Institution  [ University of Kerala ▾ ]   (required — shared)       │
+│  Language     [ English ▾ ]                (optional — shared)       │
+│                                                                       │
+│──── 5 files ───────────────────────────── [+ Add more] [✕ Clear all] │
+│                                                                       │
+│  ┌───────────────────────────────────────────────────────────────┐   │
+│  │  [pg1]  CS301-DataStructures.pdf    2.3 MB   🔍 Scanning…    │   │
+│  └───────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+│  ┌───────────────────────────────────────────────────────────────┐   │
+│  │  [pg1]  MA101-EnggMaths.pdf         1.8 MB   ✅ Ready    [✕]  │   │
+│  │         Code [MA101]  Name [Engineering Mathematics        ]  │   │
+│  │         Year [2023 ]  Sem  [3   ]  Exam [End-Semester      ▾] │   │
+│  │         Prog [B.Tech                                       ]  │   │
+│  │         ✨ courseCode: MA101  ✓  ✕                            │   │
+│  └───────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+│  ┌───────────────────────────────────────────────────────────────┐   │
+│  │  [pg1]  PHY201-Optics.pdf           3.1 MB   ⚠ Review    [✕]  │   │
+│  │         Code [PHY201]  Name [                            ]    │   │
+│  │         Year [      ]  Sem  [    ]  Exam [Select…        ▾]   │   │
+│  └───────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+│──────────────────────────────────────────────────────────────────────│
+│  3 ready · 1 scanning · 1 review needed                              │
+│                                       [ 📤 Upload 3 Ready files → ]  │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### Screen Layout — Mobile Adaptation
+
+On screens narrower than `md` (768 px):
+
+- A dismissible "This works best on a computer" banner at the top (dismissed state stored in `localStorage`).
+- Each file is a **full-width card**. Tapping a card flagged "⚠ Review needed" opens `BulkMetadataSheet` — a bottom sheet with the full `StepMetadata`-style form for that one file.
+- The Institution picker is stickied below the page header.
+- The "Upload N files" CTA is a **sticky bottom bar** at the same visual prominence as `ScanFAB`.
+- OCR suggestion pills appear inside the expanded bottom sheet only (not on the collapsed card, to keep cards scannable).
+- Thumbnails are 64×90 px (smaller than desktop) to keep the list compact.
+
+### New Files — Repository Additions
+
+```
+src/pages/BulkUpload.jsx
+  └─ Route /upload/bulk. Auth guard (redirects to login if not logged in).
+     React.lazy boundary — never included in the main bundle.
+     Renders BulkFilePicker when queue is empty;
+     BulkQueue + BulkUploadBar otherwise.
+
+src/components/bulk/
+  BulkFilePicker.jsx
+    Drag-drop zone + <input type="file" multiple accept="application/pdf">.
+    Validates each file: MIME type application/pdf AND first 4 bytes %PDF.
+    Shows rejected files (wrong type / >50 MB / already in queue) with reasons.
+
+  BulkQueue.jsx
+    Scrollable list rendering one BulkQueueItem per file.
+    Reads files array from bulkStore.
+
+  BulkQueueItem.jsx
+    One row per file:
+      - 72×102 px first-page thumbnail (pdfjs-dist canvas, IntersectionObserver lazy)
+      - File name + size
+      - Status badge (see states below)
+      - Inline compact metadata fields (desktop)
+      - OCR suggestion pills (accept ✓ / dismiss ✕), same mechanic as StepMetadata
+      - Remove button ✕ (hidden once upload has started)
+    On mobile: tapping the row opens BulkMetadataSheet.
+
+  BulkMetadataSheet.jsx
+    Mobile-only bottom sheet (same mechanism as LoginSheet).
+    Full StepMetadata-style form for one file.
+    Same field layout, chip selectors, and keyboard-avoidance as StepMetadata.
+
+  BulkUploadBar.jsx
+    Sticky footer bar:
+      - Live summary counts: "N ready · M scanning · K review · D duplicate · F failed"
+      - Primary CTA: "📤 Upload N Ready files" (disabled when 0 ready or uploading)
+      - "Upload all when ready" toggle (3 s countdown + cancel before firing)
+      - During upload: Pause + Cancel controls
+
+src/store/bulkStore.js
+  New Zustand store — see state shape below.
+
+src/hooks/useBulkOcr.js
+  Serial OCR orchestration over the queue — see §OCR below.
+
+src/hooks/useBulkUpload.js
+  Bounded-concurrency upload engine — see §Upload Engine below.
+```
+
+### Per-File Status States
+
+```
+idle → thumbnailing → hashing → ocr-queued → ocr-running
+  │                                                  │
+  │                                                  └→ ready | review-needed
+  │
+  └── (once Upload tapped)
+        pending → dedup-checking
+          ├─ duplicate  (layer 2 matched, or same SHA-256 as another queued file)
+          └─ uploading → done | failed
+```
+
+### `store/bulkStore.js` — State Shape
+
+```javascript
+{
+  // Per-file queue ────────────────────────────────────────────────────
+  files: [],    // Array<BulkFileRecord> — see shape below
+
+  // Shared batch fields ───────────────────────────────────────────────
+  institution:     { label: '', qid: '' },  // required; applies to all files
+  defaultLanguage: 'en',
+
+  // Upload session flags ──────────────────────────────────────────────
+  uploadStarted: false,
+  isUploading:   false,
+}
+
+// BulkFileRecord shape:
+{
+  id:   string,          // nanoid() assigned on add
+  file: File,            // original File object (never serialised to storage)
+  name: string,
+  size: number,          // bytes
+
+  // ── Thumbnail ──────────────────────────────────────────────────────
+  thumbnailDataUrl:  null | string,   // rendered first-page JPEG dataURL
+  thumbnailLoading:  boolean,
+
+  // ── Hash ───────────────────────────────────────────────────────────
+  hash:       null | string,          // SHA-256 hex
+  hashStatus: 'idle' | 'running' | 'done' | 'failed',
+
+  // ── OCR ────────────────────────────────────────────────────────────
+  ocrStatus:      'idle' | 'queued' | 'running' | 'done' | 'failed' | 'skipped',
+  ocrSuggestions: {
+    courseName:  null | string,
+    courseCode:  null | string,  // already normalised (trim→upper→collapse)
+    examType:    null | string,  // one of 9 canonical values, or null
+    year:        null | string,
+    month:       null | string,
+  },
+  ocrDismissed: {},  // { [fieldName]: true }
+  ocrAccepted:  {},  // { [fieldName]: true } — fed into ocr-assist header at upload
+
+  // ── Metadata (user-confirmed values) ───────────────────────────────
+  metadata: {
+    program:    '',
+    courseName: '',
+    courseCode: '',  // normalised before storage and before identifier build
+    year:       '',
+    month:      '',
+    examType:   '',
+    semester:   '',
+    language:   'en',
+    // institution comes from bulkStore.institution (shared)
+  },
+
+  // ── Computed ───────────────────────────────────────────────────────
+  identifier:       null | string,  // rebuilt on every metadata change
+  isReady:          boolean,        // see "Validation — Ready Status" below
+  validationErrors: {},             // { [fieldName]: string }
+
+  // ── Dedup ──────────────────────────────────────────────────────────
+  dedupStatus:  null | 'checking' | 'ok' | 'duplicate' | 'error',
+  duplicateUrl: null | string,
+
+  // ── Upload ─────────────────────────────────────────────────────────
+  uploadStatus:   null | 'pending' | 'uploading' | 'done' | 'failed' | 'skipped',
+  uploadProgress: 0,            // 0–1 byte fraction
+  uploadError:    null | string,
+  archiveUrl:     null | string,  // archive.org/details/{id}, set on success
+  retryCount:     0,
+}
+```
+
+### `hooks/useBulkOcr.js` — Responsibilities
+
+```
+1. Watch bulkStore.files for files with ocrStatus === 'idle'; push them into
+   an internal serial queue (FIFO, in the order they appear in the files array).
+2. Process one file at a time using the shared ocrWorker.js from Phase 8.
+   The same worker instance is reused across the whole session — never spawn
+   one worker per file.
+3. maxPages: 1 (first page only; course headers are always on page 1).
+4. Hard per-file timeout: 8 s. Exceeded → mark ocrStatus 'skipped', do NOT
+   show an error to the user, continue immediately to the next file.
+5. On success: populate ocrSuggestions using the same normalisation rules as
+   metadataExtract.js (trim → toUpperCase → collapse whitespace/hyphens on
+   courseCode). The normalised courseCode must produce a byte-identical slug
+   to any manually-typed equivalent (invariant 15).
+6. Never auto-fill a field the user has already typed into (invariant 13
+   applies per file in the bulk queue exactly as in StepMetadata).
+7. The 'ocr-assist' header value is built per file at upload time from
+   ocrAccepted — identical to single-file behaviour.
+```
+
+### `hooks/useBulkUpload.js` — Upload Engine
+
+```
+1. Triggered when user taps "Upload N Ready files".
+2. For each Ready file, in a hand-rolled bounded-concurrency pool (max 3
+   simultaneous):
+   a. Hash (SHA-256 via hashWorker.js) — if not already done during OCR phase.
+   b. Dedup layer 2: GET archive.org/metadata/{identifier}.
+      Results cached in a per-session Map so re-triggering the upload after
+      fixing a metadata error does not re-query Archive.org for known items.
+   c. Duplicate → mark uploadStatus 'skipped', log duplicateUrl, no PUT.
+   d. PUT via existing functions/api/upload.js with all x-archive-meta-*
+      headers. Includes source: 'pdf-upload' and the ocr-assist field list.
+      Layer 3 (x-archive-meta-sha256) is appended by upload.js as always.
+3. Retries: 3 attempts per file, exponential backoff (1 s → 4 s → 15 s).
+   Honour Retry-After header on 429 / 503.
+4. 401 from /api/upload → abort the entire batch immediately. Surface a
+   re-login prompt. Preserve all queue state (completed files stay done,
+   pending files stay pending) so the user can resume after re-auth without
+   re-uploading anything already finished.
+5. Per-file byte progress tracked via ReadableStream tee where supported;
+   falls back to indeterminate spinner.
+6. Cross-file dedup within the batch itself: if two queued files share the
+   same SHA-256, the second is marked 'duplicate' pointing at the first.
+   Only one PUT is issued.
+```
+
+### OCR Budget — Bulk vs. Single-File
+
+| Aspect | Single-file (Phase 8) | Bulk (Phase 9A) |
+|---|---|---|
+| Pages OCR'd | Up to 2 | **1 (first page only)** |
+| Per-file timeout | 15 s | **8 s** |
+| Worker instances | 1 | **1 (shared, reused across batch)** |
+| Parallelism | n/a | **Serial — one file at a time** |
+| Blocks upload flow | Never | Never |
+| User can dismiss pill | Yes | Yes (per file) |
+
+### File Constraints
+
+| Constraint | Rule |
+|---|---|
+| Accepted types | `.pdf` only — MIME `application/pdf` AND first 4 bytes `%PDF` |
+| Max file size | 50 MB per file (same as single-file upload; §19) |
+| Max files per session | 50 (soft cap — warn at 30, show count; hard block at 50) |
+| Batch total size | Warn (not block) at 200 MB total selected |
+
+### Validation — "Ready" Status
+
+A `BulkFileRecord` is `isReady = true` when **all** of:
+
+- `bulkStore.institution.qid` is non-empty
+- `metadata.courseCode` is non-empty after normalisation
+- `metadata.year` is a 4-digit integer in `[1980, currentYear + 1]`
+- `metadata.examType` is one of the 9 canonical values (§5B)
+
+`courseName`, `semester`, `program`, `month` are optional — a file without them is still uploadable.
+
+### Updated: `StepSource.jsx` — Bulk Upload Option
+
+The existing source selection screen gains a tertiary option below "Upload existing PDF":
+
+```
+┌─────────────────────────────────┐
+│  Add a Question Paper           │
+│─────────────────────────────────│
+│  ┌───────────────────────────┐  │
+│  │  📷  Scan with Camera     │  │  ← PRIMARY
+│  └───────────────────────────┘  │
+│  ─────────── or ──────────────  │
+│  [ 📄 Upload one PDF ]          │  ← secondary
+│  ─────────── or ──────────────  │
+│  [ 📦 Bulk upload PDFs ]        │  ← tertiary → /upload/bulk
+└─────────────────────────────────┘
+```
+
+The bulk option is shown on desktop always. On mobile it is shown but links to `/upload/bulk` which displays the "works best on a computer" notice — the camera flow is never displaced.
+
+---
+
 ## 6. Upload Wizard — Updated Step Flow
 
 ```
@@ -816,6 +1158,7 @@ Mission, how-to (including camera scan flow), open source links.
 | `/` | Home | |
 | `/browse` | Browse | |
 | `/upload` | Upload | Requires login |
+| `/upload/bulk` | BulkUpload | Requires login; React.lazy; desktop-primary ★ Phase 9A |
 | `/paper/:identifier` | Paper | |
 | `/about` | About | |
 
@@ -880,6 +1223,7 @@ npm run build
 
 ## 21. Invariants — Never Violate These
 
+
 1. **Never store the user's Archive.org password** — sent once to login Worker, then gone.
 2. **Never store credentials server-side** — Workers forward per-request and discard.
 3. **Never upload using a shared Archive.org account.**
@@ -898,6 +1242,10 @@ npm run build
 16. **Auto-crop never distorts aspect ratio** ★ Phase 8 — if the detected quad has confidence < 0.6 or area < 60% of the frame, fall back to the raw frame. A squished PDF is worse than an uncropped one.
 17. **Enhancement is reversible per page** ★ Phase 8 — the original warped (or raw) ImageBitmap is kept in memory until the PDF is committed, so the user can switch enhancement modes in `PageReview` without re-capturing.
 18. **Third-party WASM / model assets are served same-origin** ★ Phase 8 — scribe.js WASM, Tesseract language data, and any edge-detection WASM live under `public/vendor/…`. No CDN dependency on the upload path.
+19. **Bulk upload never bypasses per-file dedup** ★ Phase 9A — every file in a bulk batch runs all three deduplication layers (§12) before its IAS3 PUT is fired. The concurrency pool does not start a PUT for a file until that file's layers 1 and 2 are confirmed.
+20. **Bulk OCR is always serial** ★ Phase 9A — the single shared `ocrWorker.js` instance processes one file at a time in the bulk queue. Never spawn parallel OCR workers for a batch — memory and CPU contention on mid-range devices is real.
+21. **Bulk upload is PDF-only at every entry point** ★ Phase 9A — `BulkFilePicker` validates MIME type AND `%PDF` magic bytes for every selected file. Non-PDFs are shown to the user with a clear rejection reason and are never silently discarded.
+22. **Per-file metadata is confirmed individually in bulk mode** ★ Phase 9A — `institution` and `language` are the only fields that propagate across the whole batch automatically. `courseCode`, `courseName`, `year`, `examType`, `semester`, and `program` must be confirmed (or accepted from OCR suggestion pills) per file before that file reaches `isReady = true`.
 
 ---
 

@@ -197,9 +197,137 @@
 
 ---
 
-## Phase 9 — Bulk Upload (Folder / Multi-PDF Ingestion) *(deferred — do not start yet)*
+## Phase 9A — Simple Batch PDF Upload ★ NEXT
 
-> **Status: deferred.** The full plan of record is preserved below so whoever picks it up has the complete design, but Phase 9 is explicitly paused. No tasks in this phase should be started opportunistically — unblock other maintenance and correctness work first (e.g. the Wikidata institution lookup fix).
+> **Status: ready to implement.** This is the simpler, ship-first bulk upload flow. A contributor selects multiple pre-existing PDFs from their device, OCR runs automatically in the background on each, and a single review screen lets them confirm per-file metadata before one "Upload All" action sends everything to Archive.org. No camera capture, no image-to-PDF conversion, no folder tree walking, no IndexedDB persistence. Full design spec in CLAUDE.md §5C.
+
+**Goal:** Let any logged-in contributor donate a set of pre-scanned PDFs in one sitting without repeating the single-file wizard N times. Primary use case: a student has 8–10 past papers on their laptop and wants to upload them all correctly tagged in under 10 minutes.
+
+**Audience:** Any contributor with local PDFs. Desktop-primary (multi-file picker UX), but accessible on mobile with a "works best on a computer" advisory.
+
+**Non-negotiable constraints:**
+1. **PDF-only.** MIME type `application/pdf` AND `%PDF` magic-byte check on every file. Non-PDFs rejected at the picker with a clear reason — never silently dropped.
+2. **Per-file dedup.** All three layers from CLAUDE.md §12 run per file before any PUT. The concurrency pool does not start an upload until layers 1 and 2 are confirmed for that file.
+3. **No auto-fill.** OCR suggestions appear as dismissible pills. Fields the user has already typed into are never overwritten (invariant 13 applies per file).
+4. **Bounded concurrency.** Max 3 simultaneous IAS3 PUTs. Never fire N unbounded promises at a file list.
+5. **No new Pages Functions.** All orchestration, hashing, OCR, and queue state stays in the browser. Existing `functions/api/upload.js` handles each PUT unchanged.
+6. **Bundle budget holds.** Bulk route is a `React.lazy` boundary — never loaded by `/` or `/upload`. Bulk chunk ≤ 25 KB gz; single-file `/upload` growth ≤ 1 KB gz.
+7. **`courseCode` normalisation invariant (15) is enforced at every entry point** — OCR suggestions, inline field edits, and blur handlers all run `trim → toUpperCase → collapse whitespace/hyphens` before storing or building the identifier.
+
+### 9A.1 — Entry point & routing
+
+- [ ] Add `/upload/bulk` route in `App.jsx` → `BulkUpload.jsx` (auth guard: redirect to login, return after)
+- [ ] Update `StepSource.jsx` to show a tertiary "📦 Bulk upload PDFs" option below the single-PDF option; routes to `/upload/bulk`
+- [ ] On mobile (< `md`): bulk page shows a dismissible "This feature works best on a computer" banner at the top; does not block access
+- [ ] `BulkUpload.jsx` is a `React.lazy` / `React.Suspense` boundary — never included in the main or single-file upload chunk
+
+### 9A.2 — File picker & validation (`BulkFilePicker.jsx`)
+
+- [ ] Drag-and-drop zone (full area) + "Select PDFs" button using `<input type="file" multiple accept="application/pdf">`
+- [ ] On file selection: validate each file — MIME type `application/pdf` AND first 4 bytes equal `%PDF`
+- [ ] Rejected files (wrong type, > 50 MB, already in queue by name+size) shown in a dismissable warning list with the specific rejection reason per file; never silently dropped
+- [ ] "Add more" button available while queue is not uploading — appends files to an existing session
+- [ ] Soft cap: warn (not block) when queue exceeds 30 files; hard limit at 50 files per session; warn at 200 MB total batch size
+
+### 9A.3 — Queue screen & per-file state (`bulkStore.js`)
+
+- [ ] `src/store/bulkStore.js` — new Zustand store; full shape documented in CLAUDE.md §5C
+- [ ] `BulkQueue.jsx` — scrollable list of `BulkQueueItem` rows; reads `files` array from `bulkStore`
+- [ ] `BulkQueueItem.jsx` — one row per file: 72×102 px first-page thumbnail, file name + size, status badge, inline compact metadata fields (desktop), OCR suggestion pills, remove button (✕, only before upload starts)
+- [ ] On mobile: tapping a `BulkQueueItem` opens `BulkMetadataSheet` (bottom sheet) for that file
+- [ ] Shared fields sticky at top of screen: Institution picker (required, reuses existing `InstitutionSearch` component) + Language chip (defaults to `en`)
+- [ ] Status badges: `🔍 Scanning` | `✅ Ready` | `⚠ Review needed` | `⬆ Uploading` | `✅ Done` | `⊘ Duplicate` | `❌ Failed`
+
+### 9A.4 — First-page thumbnails
+
+- [ ] Each `BulkQueueItem` renders the first page of its PDF via `pdfjs-dist` into a small canvas (72×102 px at `scale = 72 / page.width`)
+- [ ] Thumbnails are loaded lazily using `IntersectionObserver` — only when the row scrolls into the viewport
+- [ ] LRU eviction: beyond 30 rendered thumbnails, evict oldest to keep heap bounded
+- [ ] `pdfjs-dist` is already in the dependency tree; no new library added
+- [ ] Thumbnail rendering happens off the main thread via `pdfjs-dist`'s existing worker — no additional worker needed
+
+### 9A.5 — OCR (`useBulkOcr.js`)
+
+- [ ] `src/hooks/useBulkOcr.js` watches `bulkStore.files` for `ocrStatus === 'idle'`; enqueues files and processes them **one at a time**
+- [ ] Uses the shared `ocrWorker.js` from Phase 8 — same instance reused for the whole batch session; never spawn one worker per file
+- [ ] First page only (`maxPages: 1`); hard per-file timeout **8 s** (down from the 15 s single-file budget)
+- [ ] Timeout or worker failure → set `ocrStatus: 'skipped'`; continue to next file; no error shown to the user
+- [ ] On success: populate `ocrSuggestions` in `bulkStore` for that file; apply the same normalisation as `metadataExtract.js` (`trim → toUpperCase → collapse whitespace/hyphens` on `courseCode`)
+- [ ] Suggestion pills rendered in each row: `✨ Suggested: CS301 — Use? ✓ ✕` — same accept/dismiss mechanic as `StepMetadata`
+- [ ] Never overwrite a field the user has already typed into (invariant 13 applies per file)
+- [ ] `ocr-assist` field list built per file at upload time from that file's `ocrAccepted` map
+
+### 9A.6 — Mobile metadata form (`BulkMetadataSheet.jsx`)
+
+- [ ] Mobile-only bottom sheet (same slide-up mechanism as `LoginSheet`); opened when user taps a `BulkQueueItem` that needs review
+- [ ] Contains the full `StepMetadata`-style form for one file: all fields, chip selectors, and keyboard-avoidance behaviour
+- [ ] `courseCode` field: normalise on blur (`trim → toUpperCase → collapse whitespace/hyphens`); recompute and show the `identifier` preview string below the field
+- [ ] `examType`: compact chip-select showing all 9 canonical values
+- [ ] `semester`: horizontal scrollable chip row (1–8)
+- [ ] `year`: numeric text input, pattern `[0-9]{4}`, validates range `[1980, currentYear + 1]`
+- [ ] On desktop, these fields are rendered inline within the `BulkQueueItem` row (no bottom sheet)
+
+### 9A.7 — Upload engine (`useBulkUpload.js`)
+
+- [ ] `src/hooks/useBulkUpload.js` — triggered when user taps "Upload N Ready files"
+- [ ] **Bounded concurrency pool: max 3 simultaneous PUTs** (not user-configurable in Phase 9A); hand-rolled promise pool, not `Promise.all`
+- [ ] Per-file steps before PUT:
+  - [ ] Hash: SHA-256 via existing `hashWorker.js`; all files go through the worker (not just > 10 MB)
+  - [ ] Dedup layer 2: GET `archive.org/metadata/{identifier}`; cache results in a per-session `Map` keyed by identifier — re-runs of the same batch do not re-query Archive.org for already-known identifiers
+  - [ ] Duplicate (layer 2 hit) → set `uploadStatus: 'skipped'`, set `duplicateUrl`, do not PUT; continue to next file
+- [ ] PUT via existing `functions/api/upload.js` with all `x-archive-meta-*` headers including `source: 'pdf-upload'` and the `ocr-assist` field list; layer 3 (`x-archive-meta-sha256`) appended by `upload.js` unchanged
+- [ ] Retries: 3 attempts per file, exponential backoff (`1 s → 4 s → 15 s`); honour `Retry-After` on 429 / 503
+- [ ] 401 from `/api/upload` → abort the entire batch immediately; surface re-login prompt; preserve all queue state (completed entries stay done, pending stay pending) so user can continue after re-auth without re-uploading finished files
+- [ ] Per-file byte progress tracked via `ReadableStream` tee where supported; falls back to indeterminate spinner
+- [ ] Cross-file dedup within the batch: two files with identical SHA-256 → second marked `uploadStatus: 'skipped'` with `duplicateUrl` pointing at the first file's `id`; only one PUT issued
+
+### 9A.8 — Summary bar & CTA (`BulkUploadBar.jsx`)
+
+- [ ] Sticky footer bar always visible on the queue screen
+- [ ] Live counts: `✅ N done · ⬆ M uploading · ⏳ K pending · ⚠ J review · ⊘ D duplicate · ❌ F failed`
+- [ ] Primary CTA: "📤 Upload N Ready files" — disabled when 0 Ready files or upload already running; label updates live as files transition to Ready
+- [ ] "Upload all when ready" toggle: auto-starts upload once every file is either `isReady` or has a terminal status; shows a 3-second countdown with a cancel option before firing
+- [ ] Once upload has started: CTA replaced by a Pause button (halts the pool from picking up new files; in-flight PUTs complete) and a Cancel button (same as Pause but marks remaining pending files as cancelled)
+
+### 9A.9 — Testing
+
+- [ ] Unit — `tests/bulkValidation.test.js`: file rejection (wrong MIME, `> 50 MB`, already in queue by name+size), `courseCode` normalisation at blur and on OCR accept, `isReady` flag logic against all required field combinations
+- [ ] Unit — `tests/bulkOcr.test.js`: serial processing order verified, 8 s timeout → `ocrStatus: 'skipped'`, OCR suggestion normalisation byte-matches `metadataExtract.js` output for the same input string, existing-value guard (typing in a field prevents OCR overwrite)
+- [ ] Unit — `tests/bulkUpload.test.js`: concurrency limit (enqueue 10 fake uploads, assert max 3 concurrent at any tick), retry backoff timing, 401 aborts whole batch and preserves queue state, cross-file SHA-256 dedup collapses two identical files to one PUT
+- [ ] Playwright — `tests/bulkUpload.spec.js` (desktop viewport):
+  - Drop fixture set of 8 PDFs (5 valid + 1 non-PDF + 1 `> 50 MB` + 1 intentional content-duplicate of another). Mock `/api/upload` and `archive.org/metadata/*` as per CLAUDE.md §23.
+  - Assert: 4 uploaded, 1 duplicate skipped, 1 non-PDF rejected at picker, 1 oversized rejected at picker, 1 cross-file duplicate skipped.
+  - Assert OCR pills appear on queue items after mocked `ocrWorker` completes.
+  - Assert "Upload" CTA disabled until institution is set.
+  - Assert `source: pdf-upload` present in PUT request `x-archive-meta-source` header.
+  - Assert bulk-route JS chunk is **not** loaded on `/` or `/upload` page (bundle split verification).
+- [ ] Playwright — mobile: assert `/upload/bulk` shows the desktop-recommendation banner on `devices['Pixel 5']`; assert `BottomNav` Upload tab still navigates to the camera flow (not bulk)
+- [ ] Playwright — re-auth recovery: start a 4-file batch, mock 401 on the third PUT, assert re-login prompt appears, assert first two files remain `done` and last two remain `pending` after mock re-auth
+
+### 9A.10 — Bundle & performance
+
+- [ ] All bulk components and hooks live behind the `React.lazy` boundary on `/upload/bulk` — zero bulk JS loaded on any other route
+- [ ] `pdfjs-dist`, `ocrWorker.js`, and `hashWorker.js` are existing dependencies — no new libraries added
+- [ ] Thumbnail LRU: evict beyond 30 entries; keep heap under 150 MB on a 50-file session
+- [ ] Measured bundle impact: bulk-route chunk ≤ 25 KB gz; single-file `/upload` chunk growth from this phase ≤ 1 KB gz; main chunk growth ≤ 0 KB gz
+
+### 9A.11 — Exit Criteria
+
+1. [ ] A contributor can select 10 PDFs, see first-page thumbnails and OCR suggestions appear per file, confirm or edit metadata for each, and end up with all 10 (minus true duplicates) correctly tagged items on Archive.org.
+2. [ ] Rejected files (wrong type, oversized) are shown with a specific rejection reason; they never silently vanish from the UI.
+3. [ ] All three dedup layers run per file. `status: duplicate` items are surfaced in the UI and never uploaded.
+4. [ ] `courseCode` normalisation (invariant 15) produces byte-identical identifier slugs whether the value came from OCR, manual typing, or a previously typed value in the same session.
+5. [ ] Concurrent uploads never exceed 3 simultaneous IAS3 PUTs — verifiable via the mocked `/api/upload` call log in the Playwright suite.
+6. [ ] A 401 mid-batch shows a re-login prompt and preserves all queue state: completed files stay done, pending files stay pending.
+7. [ ] Single-file `/upload` flow and all Phase 1–8 Playwright specs pass unchanged.
+8. [ ] Mobile `/upload/bulk` shows the desktop-recommendation banner; camera flow remains the primary mobile upload path.
+9. [ ] Bulk-route chunk ≤ 25 KB gz; main bundle and single-file upload chunk each grow by ≤ 1 KB gz.
+
+---
+
+## Phase 9B — Advanced Folder Ingestion *(deferred — do not start until 9A is shipped)*
+
+> **Status: deferred.** Phase 9A (above) ships first. The full plan below is preserved for when a contributor needs to ingest hundreds of files from a folder tree — with path-aware metadata inference, IndexedDB crash recovery, dry-run mode, and a configurable concurrency slider. Do not start Phase 9B tasks opportunistically.
 
 **Goal:** Make it practical for a single contributor (a student rep, department coordinator, or librarian) to ingest **tens to hundreds of previously-scanned PDFs** in one sitting — covering many branches, courses, exam types, and years — without turning the upload wizard into a per-file slog. Primary use case: someone has a folder tree like `KTU/CSE/S4/2023/Main/CS301-DataStructures.pdf` on a laptop and wants every file safely on Archive.org, correctly tagged, with duplicates silently skipped.
 
