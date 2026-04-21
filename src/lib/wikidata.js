@@ -17,7 +17,7 @@
 
 const WIKIDATA_SPARQL_ENDPOINT = "https://query.wikidata.org/sparql";
 const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
-const CACHE_VERSION = "v3"; // bump to bust all caches
+const CACHE_VERSION = "v4"; // bump to bust all caches
 
 // ---------------------------------------------------------------------------
 // Institution types — cast the widest net for degree-granting bodies
@@ -563,61 +563,125 @@ function cacheKey(stateQid) {
   return `quarchive_institutions_${CACHE_VERSION}_${scope}`;
 }
 
-async function fetchInstitutionsFromWikidata(stateQid = null) {
-  // Primary query: state-scoped or all-India
-  const sparql = buildInstitutionSparql({ stateQid });
-  const url = `${WIKIDATA_SPARQL_ENDPOINT}?query=${encodeURIComponent(sparql)}`;
-
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/sparql-results+json",
-      "User-Agent":
-        "Quarchive/2.0 (https://github.com/quarchive; educational project)",
-    },
-  });
-
-  if (!res.ok) {
-    throw new Error(
-      `Wikidata SPARQL query failed: ${res.status} ${res.statusText}`,
-    );
-  }
-
-  const json = await res.json();
-  let results = parseInstitutionResults(json);
-
-  // If state-scoped returned fewer than 50 results, run a wide-scope fallback
-  // (catches institutions with only P17=India and no P131 link to the state)
-  if (stateQid && results.length < 50) {
-    try {
-      const wideSparql = buildInstitutionSparql({ stateQid, wideScope: true });
-      const wideUrl = `${WIKIDATA_SPARQL_ENDPOINT}?query=${encodeURIComponent(wideSparql)}`;
-      const wideRes = await fetch(wideUrl, {
-        headers: {
-          Accept: "application/sparql-results+json",
-          "User-Agent":
-            "Quarchive/2.0 (https://github.com/quarchive; educational project)",
-        },
-      });
-      if (wideRes.ok) {
-        const wideJson = await wideRes.json();
-        const wideResults = parseInstitutionResults(wideJson);
-        // Merge, deduplicating by QID
-        const existingQids = new Set(results.map((r) => r.qid));
-        for (const r of wideResults) {
-          if (!existingQids.has(r.qid)) {
-            results.push(r);
-            existingQids.add(r.qid);
-          }
-        }
-      }
-    } catch {
-      // wide-scope fallback failure is non-fatal
+/**
+ * Fetch with an AbortController-backed timeout. The public Wikidata SPARQL
+ * endpoint will happily hang for 60+ seconds on an expensive query before
+ * returning 504 — we cut that off client-side so the UI never freezes.
+ */
+async function fetchJsonWithTimeout(url, { timeoutMs = 12000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Accept: "application/sparql-results+json",
+        "User-Agent":
+          "Quarchive/2.0 (https://github.com/quarchive; educational project)",
+      },
+    });
+    if (!res.ok) {
+      throw new Error(
+        `Wikidata SPARQL query failed: ${res.status} ${res.statusText}`,
+      );
     }
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
   }
-
-  return results;
 }
 
+/**
+ * Post-filter type list used *after* the Wikibase mwapi EntitySearch has
+ * already narrowed candidates to ~50–100 text matches. Intentionally small —
+ * mwapi has done the hard work, this just rejects non-institutions (people,
+ * events, awards named after universities, etc.) via a cheap P31/P279* check.
+ *
+ * The umbrella types below transitively cover the full 40+ hierarchy from
+ * INSTITUTION_TYPES through `wdt:P279*`, at a fraction of the query cost.
+ */
+const MWAPI_POSTFILTER_TYPES = [
+  "Q3918", // university
+  "Q189004", // college
+  "Q38723", // higher education institution
+  "Q1664720", // institute of technology
+  "Q1371037", // institute of technology (alt)
+  "Q47531586", // Institute of National Importance (India)
+  "Q2385804", // educational institution (catch-all)
+  "Q4671277", // academic institution (catch-all)
+  "Q31855", // research institute
+  "Q15936437", // research university
+  "Q23039057", // institute of information technology
+];
+
+/**
+ * Build a SPARQL query that uses Wikibase's mwapi EntitySearch service for
+ * fast Elasticsearch-backed label/alias matching, then post-filters by
+ * country + institution type.
+ *
+ * This replaces the previous `wdt:P31/wdt:P279*` + `P131` union approach,
+ * which timed out at 60+ seconds on the public endpoint for all-India and
+ * deeply-nested state-scoped queries.
+ */
+function buildInstitutionMwapiSparql({
+  searchTerm,
+  stateQid = null,
+  limit = 50,
+} = {}) {
+  const typesValues = MWAPI_POSTFILTER_TYPES.map((q) => `wd:${q}`).join(" ");
+  const escapedSearch = escapeSparqlString(String(searchTerm || "").trim());
+  // mwapi's own limit — request slightly more than we'll return, since some
+  // hits will be rejected by the type post-filter.
+  const mwapiLimit = Math.min(Math.max(limit * 2, 50), 100);
+
+  // State scoping runs AFTER mwapi has narrowed to ~100 candidates, so a
+  // property-path lookup (`P131+`) is cheap. One-or-more hops lets us match
+  // an institution in a district in a state in India.
+  const stateFilter = stateQid
+    ? `?item wdt:P131+ wd:${stateQid} .`
+    : `?item wdt:P17 wd:Q668 .`;
+
+  return `
+SELECT DISTINCT ?item ?itemLabel ?itemAltLabel ?locLabel WHERE {
+  SERVICE wikibase:mwapi {
+    bd:serviceParam wikibase:api "EntitySearch" .
+    bd:serviceParam wikibase:endpoint "www.wikidata.org" .
+    bd:serviceParam mwapi:search "${escapedSearch}" .
+    bd:serviceParam mwapi:language "en" .
+    bd:serviceParam mwapi:limit "${mwapiLimit}" .
+    ?item wikibase:apiOutputItem mwapi:item .
+  }
+  ${stateFilter}
+  ?item wdt:P31/wdt:P279* ?type .
+  VALUES ?type { ${typesValues} }
+  OPTIONAL { ?item wdt:P131 ?loc . }
+  OPTIONAL {
+    ?item skos:altLabel ?itemAltLabel .
+    FILTER(LANG(?itemAltLabel) = "en")
+  }
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "${LABEL_LANGUAGES}" .
+  }
+}
+LIMIT ${limit}
+`.trim();
+}
+
+/**
+ * Return a locally-cached list of institutions for an optional state scope.
+ *
+ * IMPORTANT CHANGE (v4 cache bump): we no longer attempt an eager SPARQL
+ * bootstrap here. The previous implementation fired a `wdt:P31/wdt:P279*`
+ * query across 40+ type hierarchies plus deep `P131` unions, which the
+ * public Wikidata endpoint times out at 60+ seconds — that was the root
+ * cause of "no universities load".
+ *
+ * Instead, all live lookups go through `searchInstitutionsRemote`, which
+ * uses the Wikibase mwapi EntitySearch service (Elasticsearch-backed) and
+ * typically returns in ≤ 3 s. The local list is populated opportunistically
+ * from prior remote-search hits, cached in localStorage, and used purely
+ * as a warm-start for the fuzzy scorer on subsequent keystrokes.
+ */
 export async function getInstitutionList(stateQid = null) {
   const key = cacheKey(stateQid);
 
@@ -625,11 +689,7 @@ export async function getInstitutionList(stateQid = null) {
     const cached = localStorage.getItem(key);
     if (cached) {
       const { data, timestamp } = JSON.parse(cached);
-      if (
-        Date.now() - timestamp < CACHE_TTL &&
-        Array.isArray(data) &&
-        data.length > 0
-      ) {
+      if (Date.now() - timestamp < CACHE_TTL && Array.isArray(data)) {
         return data;
       }
     }
@@ -637,15 +697,39 @@ export async function getInstitutionList(stateQid = null) {
     // ignore cache read errors
   }
 
-  const data = await fetchInstitutionsFromWikidata(stateQid);
+  // No bootstrap — return empty; remote search will populate results on demand
+  // and `cacheRemoteResults` below will grow the warm-start list over time.
+  return [];
+}
 
+/**
+ * Merge a batch of remote-search results into the localStorage warm-start
+ * cache for a given state scope. Called by `searchInstitutionsRemote` on
+ * every successful query so repeated searches get faster over a session.
+ */
+function cacheRemoteResults(stateQid, newResults) {
+  if (!Array.isArray(newResults) || newResults.length === 0) return;
+  const key = cacheKey(stateQid);
   try {
+    const cached = localStorage.getItem(key);
+    let data = [];
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed.data)) data = parsed.data;
+    }
+    const existingQids = new Set(data.map((r) => r.qid));
+    for (const r of newResults) {
+      if (!existingQids.has(r.qid)) {
+        data.push(r);
+        existingQids.add(r.qid);
+      }
+    }
+    // Cap the warm-start cache to prevent unbounded growth across a session.
+    if (data.length > 500) data = data.slice(-500);
     localStorage.setItem(key, JSON.stringify({ data, timestamp: Date.now() }));
   } catch {
-    // ignore cache write errors (e.g. quota exceeded)
+    // ignore quota / parse errors
   }
-
-  return data;
 }
 
 // ---------------------------------------------------------------------------
@@ -780,45 +864,78 @@ export function searchInstitutionsLocal(query, list) {
 // or local results are insufficient)
 // ---------------------------------------------------------------------------
 
+/**
+ * Remote institution search via Wikibase mwapi EntitySearch.
+ *
+ * Strategy:
+ *   1. Expand the raw query through `expandQueryTokens` so abbreviations
+ *      ("ktu", "iit", "bits") are resolved to their canonical expansions
+ *      before being sent to Elasticsearch.
+ *   2. Run one mwapi-backed SPARQL query for the expanded phrase (state-
+ *      scoped if a state was selected).
+ *   3. If state-scoped and weak (<3 hits), fall back to an all-India search
+ *      so a user who selected "Kerala" but typed "IIT" still finds IITs.
+ *   4. Cache merged results into the warm-start list keyed by state.
+ *
+ * All network calls are time-boxed at 12 s via AbortController so a slow
+ * endpoint never hangs the UI.
+ */
 export async function searchInstitutionsRemote(query, stateQid = null) {
-  if (!query || !query.trim()) return [];
+  const raw = String(query || "").trim();
+  if (!raw) return [];
 
-  const runQuery = async (scopeQid) => {
-    const sparql = buildInstitutionSparql({
+  // Build the search phrase sent to Elasticsearch. Prefer an abbreviation-
+  // expanded form when the query is a known alias; otherwise use the raw
+  // text (mwapi EntitySearch already tokenises and does fuzzy matching).
+  const expandedTokens = expandQueryTokens(raw);
+  const searchTerm =
+    expandedTokens.length > raw.split(/\s+/).length
+      ? expandedTokens.join(" ")
+      : raw;
+
+  const runQuery = async (scopeQid, term) => {
+    const sparql = buildInstitutionMwapiSparql({
+      searchTerm: term,
       stateQid: scopeQid,
-      searchTerm: query.trim(),
-      limit: 100,
+      limit: 50,
     });
     const url = `${WIKIDATA_SPARQL_ENDPOINT}?query=${encodeURIComponent(sparql)}`;
-    const res = await fetch(url, {
-      headers: {
-        Accept: "application/sparql-results+json",
-        "User-Agent":
-          "Quarchive/2.0 (https://github.com/quarchive; educational project)",
-      },
-    });
-    if (!res.ok)
-      throw new Error(
-        `Wikidata SPARQL search failed: ${res.status} ${res.statusText}`,
-      );
-    const json = await res.json();
+    const json = await fetchJsonWithTimeout(url, { timeoutMs: 12000 });
     return parseInstitutionResults(json);
   };
 
-  // Try state-scoped first; if < 3 results, also run all-India search
-  let results = await runQuery(stateQid);
+  let results = [];
+  try {
+    results = await runQuery(stateQid, searchTerm);
+  } catch {
+    // Primary query failed (timeout or network) — fall through to widened
+    // retry with the raw term in case the expansion produced a pathological
+    // Elasticsearch phrase.
+    if (searchTerm !== raw) {
+      try {
+        results = await runQuery(stateQid, raw);
+      } catch {
+        results = [];
+      }
+    }
+  }
 
+  // State scoped and weak → widen to all-India with the same term.
   if (stateQid && results.length < 3) {
     try {
-      const indiaResults = await runQuery(null);
+      const indiaResults = await runQuery(null, searchTerm);
       const existingQids = new Set(results.map((r) => r.qid));
       for (const r of indiaResults) {
         if (!existingQids.has(r.qid)) results.push(r);
       }
     } catch {
-      // non-fatal
+      // non-fatal — keep whatever state-scoped results we got
     }
   }
+
+  // Opportunistic warm-start: seed the local cache so repeat searches
+  // within the same session are instant via `searchInstitutionsLocal`.
+  cacheRemoteResults(stateQid, results);
 
   return results;
 }
@@ -916,33 +1033,29 @@ SELECT ?item ?itemLabel ?locationLabel WHERE {
 
   const url = `${WIKIDATA_SPARQL_ENDPOINT}?query=${encodeURIComponent(sparql)}`;
   try {
-    const res = await fetch(url, {
-      headers: {
-        Accept: "application/sparql-results+json",
-        "User-Agent": "Quarchive/2.0 (https://github.com/quarchive; educational project)",
-      },
-    });
-    
-    if (!res.ok) return null;
-    const json = await res.json();
-    
-    if (!json.results || !json.results.bindings || json.results.bindings.length === 0) {
+    const json = await fetchJsonWithTimeout(url, { timeoutMs: 10000 });
+
+    if (
+      !json.results ||
+      !json.results.bindings ||
+      json.results.bindings.length === 0
+    ) {
       return null;
     }
-    
+
     const b = json.results.bindings[0];
-    
+
     if (!b.itemLabel || b.itemLabel.value === cleanQid) {
       return null;
     }
-    
+
     return {
       qid: cleanQid,
       label: b.itemLabel.value,
       location: b.locationLabel ? b.locationLabel.value : null,
       altLabel: null,
     };
-  } catch (err) {
+  } catch {
     return null;
   }
 }

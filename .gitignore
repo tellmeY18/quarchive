@@ -30,3 +30,7 @@ dist-ssr
 test-results/
 playwright-report/
 playwright/.cache/
+
+# Brand asset generation prompts — each maintainer keeps their own local copy.
+# Generated assets live under public/brand/ and ARE committed; the prompts are not.
+Generate.md

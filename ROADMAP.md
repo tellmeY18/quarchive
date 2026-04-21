@@ -197,6 +197,223 @@
 
 ---
 
+## Phase 9 — Bulk Upload (Folder / Multi-PDF Ingestion) *(deferred — do not start yet)*
+
+> **Status: deferred.** The full plan of record is preserved below so whoever picks it up has the complete design, but Phase 9 is explicitly paused. No tasks in this phase should be started opportunistically — unblock other maintenance and correctness work first (e.g. the Wikidata institution lookup fix).
+
+**Goal:** Make it practical for a single contributor (a student rep, department coordinator, or librarian) to ingest **tens to hundreds of previously-scanned PDFs** in one sitting — covering many branches, courses, exam types, and years — without turning the upload wizard into a per-file slog. Primary use case: someone has a folder tree like `KTU/CSE/S4/2023/Main/CS301-DataStructures.pdf` on a laptop and wants every file safely on Archive.org, correctly tagged, with duplicates silently skipped.
+
+**Audience note:** This is the **one feature in Quarchive that is desktop-first**. Mobile users keep the camera flow. Bulk ingestion requires a keyboard, a folder picker, and a stable network — forcing it onto a phone would be user-hostile. The mobile UI must still show the queue (read-only) so a contributor can start a job on a laptop and monitor progress on their phone.
+
+**Non-negotiable constraints:**
+1. **No bypass of single-file invariants.** Every file in a batch still runs the three dedup layers (CLAUDE.md §12), still gets a deterministic identifier (§11), still lands in the `quarchive` collection, and the `courseCode` normalisation gate (Phase 8, invariant 15) still runs per file.
+2. **No parallel firehose.** Archive.org rate-limits per account. Uploads run with a bounded concurrency of **3 simultaneous PUTs** (configurable 1–5); the remainder queue. Never fire N unbounded promises at a file list.
+3. **No server.** All orchestration, path parsing, dedup, hashing, OCR, and queue persistence stays in the browser. No new Pages Functions.
+4. **Crash-resilient queue.** Queue state is persisted to IndexedDB after every file-state transition. Closing the tab and reopening it resumes the job with the remaining files — hashes, identifiers, and per-file metadata survive reload. Completed and skipped entries stay visible for the session so the user can audit what happened.
+5. **Never upload raw images in bulk.** Bulk input accepts **PDFs only** (MIME + `%PDF` magic byte validation, per invariant 7). If a user drops images/zip/folders with mixed content, images are rejected with a clear message pointing them at the camera flow.
+6. **Never silently auto-fill controversial fields.** Institution, program, year-range, default examType, and semester come from a **one-time batch preset** the user confirms before the queue starts. Per-file OCR may refine `courseName` / `courseCode` / `examType`, but the batch preset is the fallback when OCR is silent or disagrees — and the user gets a mandatory review pass for any file whose identifier collides, whose hash fails, or whose OCR extracted nothing.
+7. **Bounded memory.** A 200-file × 5 MB job must not hold all PDFs in memory. Files are read, hashed, and uploaded streaming one-at-a-time (within the concurrency limit); only lightweight queue records (path, hash, status, identifier, small metadata object) live in the in-memory store.
+8. **Bundle budget still holds.** Main chunk < 150 KB gz. All bulk-upload code is a dynamic import off the `/upload/bulk` route boundary; the existing `/upload` single-file flow must not grow by more than 1 KB gz.
+
+### 9.1 — Input: folder drop + path-aware metadata inference
+
+- [ ] **Route:** `/upload/bulk` (desktop-primary; on mobile, shows a "this feature works best on a computer — here's how to start it" splash plus a read-only view of any in-progress job).
+- [ ] **Folder picker:** `<input type="file" webkitdirectory multiple>` (Chromium, Safari, Firefox all support this despite the vendor prefix) **and** a drag-and-drop zone using the **File System Access API** (`DataTransferItem.getAsFileSystemHandle()` / `FileSystemDirectoryHandle` where available) so the browser walks the tree without a flat picker. Fall back to `webkitRelativePath` on the `File` objects when FS Access is unavailable.
+- [ ] **`lib/bulkIngest.js` — `walkFolderHandle(handle)`** — async iterator yielding `{ file, relativePath }`. Skips: dotfiles, `__MACOSX/`, `Thumbs.db`, anything not ending in `.pdf` (case-insensitive). Emits a `rejected` record for non-PDFs so the user sees them in the queue UI rather than wondering why 12 files vanished.
+- [ ] **`lib/pathInfer.js` — `inferFromPath(relativePath, batchPreset)`** — pure function. Given `"KTU/CSE/S4/2023/Main/CS301-DataStructures.pdf"` and a batch preset `{ institution: { qid: 'Q...', label: 'KTU' } }`, returns a partial metadata object:
+  - `program` ← first non-institution segment (`CSE`, `ECE`, `ME`, `BTech CS`, etc.) — normalised against a small built-in alias table (`CSE → B.Tech Computer Science`).
+  - `semester` ← regex `\bS([1-8])\b` or `\bSem([1-8])\b` in any path segment.
+  - `year` ← first 4-digit number in `[1990, currentYear + 1]`.
+  - `month` ← month name or `Apr|May|Nov|Dec` abbrev in any segment.
+  - `examType` ← segment matching the 9-item canonical list (case-insensitive, same keyword map as `metadataExtract.js` §8.5 so OCR and path rules agree).
+  - `courseCode` + `courseName` ← from the **filename** (not path) via `parseFilename("CS301-DataStructures.pdf")` which accepts separators `-`, `_`, ` ` and extracts a leading code (via the Phase 8 regex) + a trailing name.
+  - Every inferred field carries a `source: 'path' | 'filename' | 'preset'` tag so the review UI can show where each value came from.
+- [ ] **Pure-function test coverage:** Unit tests in `tests/pathInfer.test.js` cover at least: `KTU/CSE/S4/2023/Main/CS301-DataStructures.pdf`, `Calicut University/B.Sc Physics/Sem 3/Nov 2021/Supplementary/PHY301.pdf`, `KTU\CSE\S4\2023\CS 301.pdf` (Windows backslashes + space), `papers/2023-cs301.pdf` (no institution segment — falls back entirely to preset).
+
+### 9.2 — Batch preset screen (pre-flight)
+
+Single screen the user fills **once** before the queue starts. Pre-fills any field an unambiguous path-scan found for **all** files; otherwise leaves blank.
+
+- [ ] **Institution** (required) — same `InstitutionSearch` bottom-sheet/autocomplete used in single-file upload. One institution per batch; mixing institutions is not supported in v1 (documented in the review screen).
+- [ ] **Default program** — optional. Used only when `pathInfer` returns nothing for `program`.
+- [ ] **Default examType** — optional. Used when neither path nor OCR yielded one.
+- [ ] **Default language** — defaults to `en`; same chip set as single-file upload.
+- [ ] **Year range guardrail** — `[min, max]`. Any file whose inferred year falls outside the range is sent straight to the mandatory review pile. Default range: `[2000, currentYear]`.
+- [ ] **Concurrency slider** — 1 to 5 simultaneous uploads, default **3**. Stored in `localStorage` under `quarchive.bulk.concurrency`.
+- [ ] **Dedup policy** — radio: (a) *Skip silently* (default), (b) *Skip and log*, (c) *Abort whole batch on first duplicate*. Applies to identifier collision **and** content-hash match on the existing Archive.org item.
+- [ ] **Dry run toggle** — when on, runs layers 1 and 2 of dedup + identifier construction for every file and produces a report, but issues **zero** PUTs. Used for sanity-checking a large folder before committing.
+
+### 9.3 — Queue engine
+
+- [ ] **`lib/bulkQueue.js`** — a small state machine, no framework dependency. Per-file states:
+
+  ```
+  pending → validating → hashing → extracting → dedup-checking →
+    ├─ needs-review        (missing required fields, year out of range, OCR empty + path ambiguous)
+    ├─ duplicate           (layer 2 or layer 3 matched)
+    ├─ ready
+    │    └─ uploading → done | failed
+    └─ rejected            (non-PDF, corrupt, > 50 MB, > 3 retries)
+  ```
+
+- [ ] **Concurrency control** — a hand-rolled promise pool, not `Promise.all`. Limit defaults to 3; the pool picks up the next `ready` file whenever a slot frees. Files in `needs-review` block themselves — they don't consume a slot until the user resolves them.
+- [ ] **Retries** — each failed PUT retries with exponential backoff (`1s, 4s, 15s`) up to 3 attempts before moving to `failed`. 429 / 503 responses honour `Retry-After` if present. 401 aborts the whole batch immediately (session expired) and prompts re-login without losing queue state.
+- [ ] **Per-file progress** — upload byte progress via `fetch` + `ReadableStream` where available; falls back to "indeterminate spinner + file-level done/pending" when streaming isn't feasible.
+- [ ] **Pause / resume / cancel** — user-facing controls at the batch level. Cancel stops new files from starting; in-flight files are allowed to finish (cancelling a PUT mid-stream leaves Archive.org in an indeterminate state, which defeats the dedup invariant).
+- [ ] **Queue persistence (`lib/bulkPersist.js`)** — IndexedDB store `quarchive.bulk.v1` with object stores `jobs` (job metadata + preset + timestamps) and `items` (one record per file: `relativePath`, `size`, `hash`, `identifier`, `status`, `retries`, `lastError`, `metadata`). Writes are debounced to one flush per 250 ms per job. On app load, if a job exists with any non-terminal items, the bulk page offers "Resume 47 pending uploads from Tuesday"; the original `File` objects are gone (browser can't persist them), so resume re-prompts the user to re-select the same root folder and matches by `relativePath` + `size` + `hash` before re-queueing.
+
+### 9.4 — Per-file OCR strategy (budget-aware)
+
+OCR is valuable for bulk (fills `courseName` / `courseCode` / `examType` where path-inference was silent) but it's the single biggest cost in the pipeline. Rules:
+
+- [ ] **Path-first, OCR-as-tiebreaker.** If `pathInfer` produced `courseCode` **and** `examType` with high confidence, **skip OCR** for that file. Saves seconds × N.
+- [ ] **OCR only the first page.** Overrides the `maxPages: 2` single-file default. Bulk ingesters care about headers, not content.
+- [ ] **Serial OCR, not parallel.** Single shared scribe.js worker from Phase 8, reused across the whole batch, with a hard **8 s per-file timeout** (down from the 15 s single-file budget). Timeout → proceed with path/preset values only.
+- [ ] **OCR ↔ path disagreement resolution:** if both produced a value for the same field and they differ, path-inferred value wins for `program` / `semester` / `year`; OCR wins for `courseName` / `courseCode`. Rationale: folder structure is an artifact of how the contributor organised files (authoritative on program/semester); what's written on the paper is authoritative on the paper's actual title.
+- [ ] **`ocr-assist` header** continues to list which fields OCR populated (§11, Phase 8) so post-hoc we can still see bulk-vs-single OCR contribution.
+
+### 9.5 — Review pile (mandatory human pass for ambiguous files)
+
+Files enter the review pile when any of:
+- No `courseCode` after path + filename + OCR.
+- Inferred year outside the preset range.
+- Identifier collision in layer 2 dedup **and** policy is not "skip silently".
+- `examType` could not be determined and batch preset left it blank.
+- Hash computation or PDF parse failed.
+
+- [ ] **Review UI — `BulkReview.jsx`** — a virtualised table (one row per file, `react-window` or hand-rolled intersection-observer pagination) with: thumbnail (first-page render via `pdfjs-dist`, cached), inferred metadata as editable fields, a "source" badge per field (`path` / `filename` / `ocr` / `preset` / `you`), and a "Skip this file" button.
+- [ ] **Bulk-edit affordances** — select multiple rows → apply a field value to all. Essential when 30 files in one folder all need the same `examType` override.
+- [ ] **"Approve all remaining"** — only enabled when every selected row has `institution + courseCode + year + examType` non-empty. Flips those rows to `ready` and the queue engine picks them up automatically.
+
+### 9.6 — Dedup behaviour for bulk
+
+All three layers from CLAUDE.md §12 run per file, but with batch-specific UX:
+
+- [ ] **Layer 1 (hash):** computed in a Web Worker (`hashWorker.js` from Phase 5). Files > 10 MB already use the worker; bulk forces all files through the worker regardless of size so the main thread stays responsive with the review UI open.
+- [ ] **Layer 2 (identifier check):** one GET to `archive.org/metadata/{identifier}` per file. Cached per-session in a `Map` keyed by identifier so re-runs of the same batch (e.g. after fixing a preset typo) don't re-hit Archive.org for already-known items.
+- [ ] **Layer 3 (IAS3 `x-archive-meta-sha256`):** unchanged from single-file upload; the existing `functions/api/upload.js` worker already handles it.
+- [ ] **Cross-file dedup within the batch itself:** two files in the same folder with identical SHA-256 (common when someone has both `CS301.pdf` and `CS301 (copy).pdf`) collapse to a single upload. The duplicate is marked `duplicate` with `duplicateOf: <relativePath>` in its queue record.
+
+### 9.7 — Reporting & audit
+
+- [ ] **Live summary bar** at the top of the bulk page: `✅ 42 done · ⏳ 3 uploading · ⏸ 17 pending · ⚠ 5 review · 🚫 2 skipped · ❌ 1 failed`.
+- [ ] **Downloadable report** — a single `quarchive-bulk-YYYYMMDD-HHMM.csv` the user can save at any point (during or after the batch). Columns: `relativePath, size, sha256, identifier, status, examType, courseCode, courseName, year, institutionQid, archiveUrl, error`. No telemetry; the file is generated client-side from the IndexedDB job record.
+- [ ] **Visible Archive.org links** — completed rows show a `→ archive.org/details/{identifier}` link so the contributor can spot-check uploads landed correctly.
+
+### 9.8 — Testing
+
+- [ ] **Unit tests — `tests/pathInfer.test.js`** — at least 15 cases covering the scenarios listed in §9.1, plus edge cases (empty path, root-level file, only-filename, unicode path segments, mixed case institution aliases).
+- [ ] **Unit tests — `tests/bulkQueue.test.js`** — concurrency is honoured (fire 10 fake uploads with limit=3, assert max 3 concurrent at any tick), retries back off correctly, 401 aborts the whole batch, pause/resume preserves ordering, cross-file hash dedup collapses identical files.
+- [ ] **Playwright — `tests/bulk.spec.js`** — desktop viewport. Drop a fixture folder of 8 PDFs (mix of: valid path+filename, valid filename only, missing examType, intentional duplicate of one other, non-PDF). Mock `/api/upload` and `archive.org/metadata/*` as in CLAUDE.md §23. Assert: 6 uploaded, 1 marked duplicate, 1 sent to review, 0 uploaded during dry-run mode, CSV export contains 8 rows.
+- [ ] **Playwright — persistence** — start a batch, kill the page mid-upload, reload, assert the resume prompt appears and no completed files are re-uploaded.
+- [ ] **Playwright — mobile** — assert `/upload/bulk` shows the "use a computer" splash on `devices['Pixel 5']` and does not expose the folder picker.
+
+### 9.9 — Bundle & performance discipline
+
+- [ ] **Dynamic import boundary:** all bulk code (`lib/bulkIngest.js`, `lib/pathInfer.js`, `lib/bulkQueue.js`, `lib/bulkPersist.js`, `components/bulk/**`) lives behind a `React.lazy` route split on `/upload/bulk`.
+- [ ] **`react-window` (or equivalent) for the review table** — never render 200 rows to the DOM at once.
+- [ ] **Measured bundle impact:** single-file `/upload` chunk growth ≤ 1 KB gz (ideally 0). Bulk-route chunk target ≤ 25 KB gz.
+- [ ] **Memory ceiling** — during a 200-file × 5 MB batch, heap must stay under 200 MB on mid-tier hardware. Achieved by (a) never holding all `File` bodies at once — reach for `File.slice()` / `ReadableStream` during hash + upload, (b) evicting the pdfjs-rendered thumbnail cache on an LRU beyond 20 entries.
+
+### 9.10 — Exit Criteria
+
+1. [ ] A contributor can drop a folder of 50 real KTU PDFs and end up with 50 (minus true duplicates) items on Archive.org, all tagged `subject: quarchive`, correctly attributed to the right institution QID, with correct `courseCode` / `examType` / `year` on each.
+2. [ ] Identifier byte-identity (Phase 8 invariant 15) is preserved: a file whose path yields `CS 301` and one whose OCR yields `cs301` both land at identifier slug `--cs301--`.
+3. [ ] Closing the tab mid-batch and reopening it the next day resumes the job without re-uploading any completed file.
+4. [ ] The three dedup layers are verifiable via the CSV export: every `status: done` row has a unique `sha256` and a unique `identifier`; every `status: duplicate` row points at either another row's identifier or an Archive.org item discovered via layer 2.
+5. [ ] Dry-run mode issues zero PUTs against mocked `/api/upload` in the Playwright suite.
+6. [ ] Main-chunk bundle growth from Phase 8 ≤ 1 KB gz. Bulk-route chunk ≤ 25 KB gz.
+7. [ ] Mobile `/upload/bulk` shows the read-only splash and does not offer a folder picker.
+8. [ ] No regression to the single-file `/upload` flow — every Phase 1–8 Playwright spec still passes unchanged.
+
+### 9.11 — Explicit non-goals (v1)
+
+- **Mixing institutions in one batch.** Users with multi-institution archives run the bulk tool once per institution. Documented in the review screen.
+- **ZIP / RAR ingestion.** The folder picker + drag-drop tree walk covers 99% of real-world cases and avoids shipping a client-side archive extractor.
+- **Scheduled / background uploads.** Out of scope until the PWA work in Phase 10 (formerly Phase 7 backlog) lands a service worker.
+- **Server-side coordination.** Two tabs running the same batch concurrently will double-upload; we document this and accept it rather than adding a locking server.
+- **Editing files after upload.** Once a file lands on Archive.org, fixing its metadata is an Archive.org-side operation (their Item Manager UI). Quarchive does not proxy metadata edits.
+
+---
+
+## Phase 10 — Branding: Quackademic the Duck *(deferred)*
+
+> **Status: deferred.** The branding work described below is a full plan of record but is explicitly paused. Both Phase 9 (Bulk Upload) and Phase 10 (Branding) are on hold — branding is polish and should not be started until the bulk-upload path lands, and bulk upload itself is parked. Do not pick up branding tasks opportunistically.
+
+**Goal:** Give Quarchive a distinct, memorable visual identity built around the pun at the heart of the name — **Quack** + **Archive**. The mascot is **Quackademic**, a scholarly duck who keeps papers safe. Applies to logo, favicon, navigation, empty states, OG image, and README hero. Must respect the existing mobile-first, editorial aesthetic (CLAUDE.md §2).
+
+**Non-negotiable constraints:**
+1. All brand assets live under `public/brand/` and are **committed** to the repo (so deploys are reproducible without a build step that calls an image model).
+2. `Generate.md` is **gitignored** — it contains the prompts each maintainer feeds to Google Gemini ("Nano Banana") to regenerate assets. It is not a source of truth; the committed PNG/SVG files under `public/brand/` are.
+3. Bundle size rule from Phase 8 still holds: main chunk < 150 KB gz. SVG logos must be inlined only if < 2 KB each; everything else is a `<img src="/brand/…">` fetch.
+4. Mobile-first: the mascot must read clearly at 24×24 px (bottom-nav icon) and at 32×32 px (favicon). Every logo variant ships with a simplified silhouette form.
+5. Colour palette is additive, not replacing: the existing neutral base stays; Duck Yellow (`#F5C518`) becomes the single accent. No rainbow.
+
+### Colour tokens
+
+| Token | Hex | Role |
+|---|---|---|
+| `duck-yellow` | `#F5C518` | Primary accent / CTA / bill |
+| `pond-ink` | `#1A1D24` | Headings, strong text, logo outline |
+| `paper-cream` | `#FAF6EE` | Page background |
+| `reed` | `#6B7A5A` | Muted secondary / metadata |
+
+Wire these into Tailwind v4 `@theme` in `src/styles/index.css` as `--color-duck-yellow`, `--color-pond-ink`, `--color-paper-cream`, `--color-reed`.
+
+### 10.1 — Asset generation (via `Generate.md`)
+
+- [ ] Write `Generate.md` (gitignored) containing one clearly-labelled prompt per asset, with explicit style guardrails ("flat editorial illustration, off-white background, no gradients, no 3D, no photorealism, single warm-yellow accent").
+- [ ] Generate the following with Gemini Nano Banana and save under `public/brand/` with these exact filenames:
+  - `wordmark.svg` — "Quarchive" wordmark, `Q` stylised as a duck head in profile.
+  - `wordmark-mono.svg` — single-colour (pond-ink) variant for light/dark contexts.
+  - `duck-mark.svg` — square mascot mark (Quackademic on paper stack). Readable at 24 px.
+  - `duck-silhouette.svg` — 1-colour duck-head silhouette for favicons and loading states.
+  - `icon-192.png`, `icon-512.png` — PWA icons (square, solid paper-cream background).
+  - `favicon.svg` — thin-line duck head, copied to `public/favicon.svg` (replacing the Vite default).
+  - `apple-touch-icon.png` — 180×180, paper-cream background.
+  - `og.png` — 1200×630 social share card: wordmark centre, duck left, tagline "Every paper. Every quack." right.
+  - `readme-hero.png` — 1440×560 README banner.
+  - `duck-empty.svg` — "no results" illustration (duck looking into an empty drawer).
+  - `duck-404.svg` — "not found" illustration (duck holding a blank paper with a `?`).
+  - `duck-uploading.svg` — optimistic state for `StepUpload.jsx`.
+- [ ] Manually pass each PNG through `oxipng` / `svgo` before committing. Target: favicon < 2 KB, og.png < 80 KB, hero < 120 KB.
+
+### 10.2 — Wire assets into the app
+
+- [ ] `index.html` — replace default favicon with `/favicon.svg`; add `apple-touch-icon`; add `<meta name="theme-color" content="#F5C518">`; add OG tags pointing at `/brand/og.png`.
+- [ ] `src/components/layout/Navbar.jsx` — replace text-only header with `wordmark.svg` on desktop.
+- [ ] `src/components/layout/BottomNav.jsx` — central Upload CTA uses `duck-silhouette.svg` at 24 px, duck-yellow background ring when active.
+- [ ] `src/components/search/PaperCard.jsx` — fallback thumbnail when no PDF preview yet is `duck-silhouette.svg` tinted `reed`.
+- [ ] `src/pages/Home.jsx` — hero section: wordmark + tagline "Every paper. Every quack." Replace any placeholder hero copy.
+- [ ] `src/pages/Browse.jsx` — empty-state uses `duck-empty.svg` with copy "No papers yet. *Be the first duck to drop one here.*"
+- [ ] Add a catch-all 404 page (`src/pages/NotFound.jsx`) using `duck-404.svg`.
+- [ ] `src/pages/About.jsx` — add a "Meet Quackademic" section under the existing Privacy / AGPL-3.0 credit block, with the mascot mark and a one-paragraph origin story.
+- [ ] `src/components/upload/ScanFAB.jsx` — replace the `📷` emoji with the duck silhouette + bill in duck-yellow. Preserves the 48 px minimum tap target from §2.
+
+### 10.3 — Voice & copy
+
+- [ ] Primary tagline everywhere marketing-facing: **Every paper. Every quack.**
+- [ ] Short-form CTA on upload: **Scan. Quack. Archive.**
+- [ ] Error copy leans into the duck without being twee: e.g. upload failure → *"That one slipped past the duck. Try again?"* (no emoji spam; one per message max).
+- [ ] Loading states may use the duck but must not animate distractingly on slow connections — a 2-frame wing-flap at 1 fps max, CSS-only, `prefers-reduced-motion: reduce` disables it entirely.
+
+### 10.4 — Tailwind / CSS wiring
+
+- [ ] Extend `@theme` in `src/styles/index.css` with the four colour tokens above.
+- [ ] Audit existing accent usages and migrate them to `bg-duck-yellow` / `text-duck-yellow` — there must be exactly **one** accent hue site-wide after migration.
+- [ ] Add a `.duck-card` utility (warm-cream background, `reed` border, soft shadow) for PaperCard and empty states.
+
+### 10.5 — Exit Criteria
+
+1. [ ] Every page in the app uses the wordmark or the duck mark somewhere above the fold.
+2. [ ] Favicon + OG image verified in (a) Chrome mobile, (b) Safari iOS (apple-touch-icon), (c) Twitter Card validator, (d) LinkedIn post inspector.
+3. [ ] All Phase 10 assets live under `public/brand/` with the exact filenames listed in 10.1. `Generate.md` is present locally and listed in `.gitignore`.
+4. [ ] Main JS bundle growth from Phase 9 ≤ 2 KB gz (brand assets are static files, not JS).
+5. [ ] `prefers-reduced-motion: reduce` disables all duck animations.
+6. [ ] Lighthouse accessibility ≥ 95 on Home and Upload (accent contrast check passes: Duck Yellow on Pond Ink ≥ 7:1).
+
+---
+
 ## Phase 8 — Capture Robustness + OCR-Assisted Metadata
 
 **Goal:** Upgrade the capture pipeline so the scanned PDF is readable, properly cropped to the paper edges, and enhanced for legibility — and use on-device OCR (via **scribe.js-ocr**) on the first 1–2 pages to auto-fill `courseName`, `courseCode`, and `examType` in the metadata form. Everything stays client-side. Zero new server cost.
