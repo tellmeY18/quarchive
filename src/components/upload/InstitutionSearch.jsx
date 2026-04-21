@@ -26,6 +26,7 @@ export default function InstitutionSearch({ value, onChange }) {
   const inputRef = useRef(null);
   const listRef = useRef(null);
   const remoteFallbackTimer = useRef(null);
+  const remoteAbortController = useRef(null);
 
   const {
     state: detectedState,
@@ -94,11 +95,12 @@ export default function InstitutionSearch({ value, onChange }) {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Cleanup timer on unmount
+  // Cleanup timer + in-flight request on unmount
   useEffect(() => {
     return () => {
       if (remoteFallbackTimer.current)
         clearTimeout(remoteFallbackTimer.current);
+      if (remoteAbortController.current) remoteAbortController.current.abort();
     };
   }, []);
 
@@ -113,7 +115,16 @@ export default function InstitutionSearch({ value, onChange }) {
         remoteFallbackTimer.current = null;
       }
 
-      if (!val.trim()) {
+      // Cancel any in-flight remote search from the previous keystroke so
+      // we never race two responses back into setResults out of order.
+      if (remoteAbortController.current) {
+        remoteAbortController.current.abort();
+        remoteAbortController.current = null;
+      }
+
+      const trimmed = val.trim();
+
+      if (!trimmed) {
         setResults([]);
         setIsOpen(false);
         setIsLoadingRemote(false);
@@ -125,32 +136,51 @@ export default function InstitutionSearch({ value, onChange }) {
       setResults(localResults.slice(0, 10));
       setIsOpen(true);
 
-      // 2) Always do remote search (debounced) so typing works even before preload finishes
+      // 2) Skip the network for short queries — local fuzzy match over the
+      // warm-start cache is all we can usefully do at ≤ 2 characters, and
+      // mwapi's candidate set for 1–2 char queries is dominated by noise.
+      // Exception: a raw Wikidata QID like "Q12345" always hits the network.
+      const isQid = /^Q\d+$/i.test(trimmed);
+      if (!isQid && trimmed.length < 3) {
+        setIsLoadingRemote(false);
+        return;
+      }
+
+      // 3) Debounced remote search with per-keystroke cancellation.
       remoteFallbackTimer.current = setTimeout(async () => {
+        const controller = new AbortController();
+        remoteAbortController.current = controller;
         setIsLoadingRemote(true);
         try {
-          const isQid = /^Q\d+$/i.test(val.trim());
           if (isQid) {
-            const qidResult = await fetchInstitutionByQid(val.trim());
+            const qidResult = await fetchInstitutionByQid(trimmed);
+            if (controller.signal.aborted) return;
             if (qidResult) {
               setResults([qidResult]);
               setIsOpen(true);
               return;
             }
           }
-          
+
           const remoteResults = await searchInstitutionsRemote(
             val,
             effectiveStateQid || null,
+            { signal: controller.signal },
           );
+          if (controller.signal.aborted) return;
           setResults(remoteResults.slice(0, 10));
           setIsOpen(true);
-        } catch {
-          // keep local results
+        } catch (err) {
+          // Aborted by a newer keystroke — stay quiet, newer request owns UI.
+          if (err?.name === "AbortError") return;
+          // Any other failure: keep the local results already painted.
         } finally {
-          setIsLoadingRemote(false);
+          if (remoteAbortController.current === controller) {
+            remoteAbortController.current = null;
+            setIsLoadingRemote(false);
+          }
         }
-      }, 500);
+      }, 350);
     },
     [institutionList, effectiveStateQid],
   );

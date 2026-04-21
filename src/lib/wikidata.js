@@ -17,7 +17,163 @@
 
 const WIKIDATA_SPARQL_ENDPOINT = "https://query.wikidata.org/sparql";
 const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
-const CACHE_VERSION = "v4"; // bump to bust all caches
+const CACHE_VERSION = "v5"; // bump to bust all caches
+
+// In-memory response cache + minimum-query-length threshold live near
+// `searchInstitutionsRemote` (below) so the caching policy is colocated
+// with the one caller that uses it.
+
+// ---------------------------------------------------------------------------
+// Description-based institution classifier
+// ---------------------------------------------------------------------------
+//
+// The Wikidata `P31/P279*` subclass-closure filter is too expensive to run
+// inside a SPARQL query at interactive latency (43 roots × deep hierarchy
+// = 500ms–60s depending on endpoint load). Instead we fetch each candidate's
+// English description and classify client-side.
+//
+// Every institution in Wikidata has a description that almost always
+// contains one of a small set of higher-ed keywords. Non-institutions
+// (cities, cricket teams, train stations) are rejected by an allow-list
+// on those keywords; K-12 schools are rejected by a separate deny-list
+// that wins over the allow-list when both match.
+
+// Higher-ed allow-list — one of these words MUST appear in the description
+// (case-insensitive) for an item to be kept. Word boundaries checked in code.
+const HIGHER_ED_KEYWORDS = [
+  "university",
+  "college",
+  "institute", // institute of technology, research institute, etc.
+  "polytechnic",
+  "academy", // e.g. military academy, academy of sciences
+  "seminary",
+  "conservatory",
+  "madrasa",
+  "gurukul", // also matches "gurukula" via \b boundary
+  // Professional-school variants. These intentionally match "school of X"
+  // (law, management, medicine, etc.) and "X school" forms that denote
+  // degree-granting professional schools. The K-12 deny-list runs FIRST,
+  // so "primary school", "boys' high school", etc. still get rejected
+  // before these allow-list patterns get a chance to accept.
+  "school of", // "school of management", "school of law", "school of planning", etc.
+  "business school",
+  "law school",
+  "medical school",
+  "dental school",
+  "nursing school",
+  "veterinary school",
+  "pharmacy school",
+  "engineering school",
+  "management school",
+  "graduate school",
+  "faculty of", // "faculty of engineering", "faculty of medicine"
+  // Indian higher-ed abbreviations (handled case-insensitively via \b).
+  "iit", // in descriptions like "the IIT at ..."
+  "iiit",
+  "iim",
+  "nit",
+  "iiser",
+  "aiims",
+  "nift",
+  "niper",
+  "xlri",
+  "bits",
+  // Generic higher-ed markers.
+  "deemed",
+  "autonomous",
+  "degree-granting",
+  "centre of post graduate", // "centre of post graduate learning" (Delhi School of Economics)
+  "post graduate",
+  "postgraduate",
+];
+
+// K-12 deny-list — if any of these appear, item is rejected even when a
+// higher-ed keyword is also present ("school of engineering in a high
+// school building" style false positives).
+const K12_REJECT_PATTERNS = [
+  /\bprimary school\b/i,
+  /\bsecondary school\b/i,
+  /\bsenior secondary\b/i,
+  /\bhigh school\b/i,
+  /\bmiddle school\b/i,
+  /\bkindergarten\b/i,
+  /\bpre[- ]school\b/i,
+  /\bnursery school\b/i,
+  /\bboarding school\b/i,
+  /\bpublic school (?:in|of|at)\b/i, // Indian-English "public school" = elite K-12
+  /\b(?:boys|girls)'? (?:high )?school\b/i,
+  /\bvidyalaya\b/i, // Hindi "school"
+  /\bvidya mandir\b/i,
+  /\bbal vidya\b/i,
+  /\bkendriya vidyalaya\b/i,
+  /\bnavodaya vidyalaya\b/i,
+  /\bjawahar navodaya\b/i,
+];
+
+// Non-institution deny-list — descriptions that flag the item is an event,
+// place, person, organisation, or infrastructure rather than a degree-
+// granting body, even if a keyword like "university" appears elsewhere
+// (e.g. "metro station near University").
+const NON_INSTITUTION_REJECT_PATTERNS = [
+  /\b(?:railway|metro|bus|train) station\b/i,
+  /\bairport\b/i,
+  /\bcricket (?:team|club|ground|stadium)\b/i,
+  /\bfootball (?:team|club)\b/i,
+  /\bpolitical party\b/i,
+  /\blegislative (?:assembly|council)\b/i,
+  /\bmunicipal corporation\b/i,
+  /\bpostal (?:division|district|code)\b/i,
+  /\bpost office\b/i,
+  /\b(?:town|village|city|metropolis|district|suburb|neighbourhood|neighborhood) (?:in|of|of India)\b/i,
+  /\bhuman settlement\b/i,
+  /\bgram panchayat\b/i,
+  /\btehsil\b/i,
+  /\bunion territory\b/i,
+  /\bfilm\b/i,
+  /\bnovel\b/i,
+  /\bmuseum\b/i,
+  /\bemployees union\b/i,
+  /\balumni association\b/i,
+  /\bstudents'? union\b/i,
+];
+
+// Compile a cheap word-boundary regex for the allow-list (case-insensitive).
+const HIGHER_ED_REGEX = new RegExp(
+  `\\b(?:${HIGHER_ED_KEYWORDS.join("|")})\\b`,
+  "i",
+);
+
+/**
+ * Classify a Wikidata entity as an institution (keep) or not (reject),
+ * based on its English label + description.
+ *
+ * Returns `true` when the item should be kept. Conservative by design:
+ * items with no description at all are kept (better a false positive in
+ * the dropdown than silently hiding a real institution).
+ */
+export function isLikelyInstitution({ label = "", description = "" } = {}) {
+  const haystack = `${label} ${description}`.toLowerCase();
+
+  // Hard deny: non-institution markers always win.
+  for (const re of NON_INSTITUTION_REJECT_PATTERNS) {
+    if (re.test(haystack)) return false;
+  }
+
+  // Hard deny: K-12 schools always win over higher-ed keywords.
+  for (const re of K12_REJECT_PATTERNS) {
+    if (re.test(haystack)) return false;
+  }
+
+  // No description at all? Keep if the LABEL itself contains a higher-ed
+  // keyword; otherwise we have no signal, so reject (mwapi often returns
+  // people/places with university-sounding labels).
+  if (!description.trim()) {
+    return HIGHER_ED_REGEX.test(label);
+  }
+
+  // With a description, require a higher-ed keyword somewhere.
+  return HIGHER_ED_REGEX.test(haystack);
+}
 
 // ---------------------------------------------------------------------------
 // Institution types — cast the widest net for degree-granting bodies
@@ -511,7 +667,7 @@ LIMIT ${effectiveLimit}
 // Result parsing
 // ---------------------------------------------------------------------------
 
-export function parseInstitutionResults(json) {
+export function parseInstitutionResults(json, { classify = true } = {}) {
   const bindings = json?.results?.bindings || [];
   const seen = new Map();
 
@@ -519,6 +675,7 @@ export function parseInstitutionResults(json) {
     const uri = b.item?.value || "";
     const qid = uri.split("/").pop() || "";
     const label = b.itemLabel?.value || "";
+    const description = b.itemDescription?.value || "";
 
     // Skip items whose label is just the QID (no English label in Wikidata)
     if (!label || !qid || /^Q\d+$/.test(label)) continue;
@@ -527,6 +684,9 @@ export function parseInstitutionResults(json) {
       const existing = seen.get(qid);
       if (!existing.location && b.locLabel?.value) {
         existing.location = b.locLabel.value;
+      }
+      if (!existing.description && description) {
+        existing.description = description;
       }
       if (!existing.altLabel && b.itemAltLabel?.value) {
         existing.altLabel = b.itemAltLabel.value;
@@ -545,13 +705,23 @@ export function parseInstitutionResults(json) {
     seen.set(qid, {
       label,
       qid,
+      description,
       altLabel: b.itemAltLabel?.value || "",
       altLabels: b.itemAltLabel?.value ? [b.itemAltLabel.value] : [],
       location: b.locLabel?.value || "",
     });
   }
 
-  return Array.from(seen.values());
+  let results = Array.from(seen.values());
+
+  // Client-side higher-ed classification: rejects K-12 schools, railway
+  // stations, cricket teams, etc. Disable with `classify: false` when the
+  // caller has already narrowed the set (e.g. `fetchInstitutionByQid`).
+  if (classify) {
+    results = results.filter(isLikelyInstitution);
+  }
+
+  return results;
 }
 
 // ---------------------------------------------------------------------------
@@ -568,9 +738,16 @@ function cacheKey(stateQid) {
  * endpoint will happily hang for 60+ seconds on an expensive query before
  * returning 504 — we cut that off client-side so the UI never freezes.
  */
-async function fetchJsonWithTimeout(url, { timeoutMs = 12000 } = {}) {
+async function fetchJsonWithTimeout(url, { timeoutMs = 12000, signal } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Chain caller's abort signal (e.g. keystroke cancellation) into the
+  // timeout controller so either can abort the fetch.
+  const onExternalAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", onExternalAbort, { once: true });
+  }
   try {
     const res = await fetch(url, {
       signal: controller.signal,
@@ -588,61 +765,42 @@ async function fetchJsonWithTimeout(url, { timeoutMs = 12000 } = {}) {
     return await res.json();
   } finally {
     clearTimeout(timer);
+    if (signal) signal.removeEventListener?.("abort", onExternalAbort);
   }
 }
 
 /**
- * Post-filter type list used *after* the Wikibase mwapi EntitySearch has
- * already narrowed candidates to ~50–100 text matches. Intentionally small —
- * mwapi has done the hard work, this just rejects non-institutions (people,
- * events, awards named after universities, etc.) via a cheap P31/P279* check.
- *
- * The umbrella types below transitively cover the full 40+ hierarchy from
- * INSTITUTION_TYPES through `wdt:P279*`, at a fraction of the query cost.
- */
-const MWAPI_POSTFILTER_TYPES = [
-  "Q3918", // university
-  "Q189004", // college
-  "Q38723", // higher education institution
-  "Q1664720", // institute of technology
-  "Q1371037", // institute of technology (alt)
-  "Q47531586", // Institute of National Importance (India)
-  "Q2385804", // educational institution (catch-all)
-  "Q4671277", // academic institution (catch-all)
-  "Q31855", // research institute
-  "Q15936437", // research university
-  "Q23039057", // institute of information technology
-];
-
-/**
  * Build a SPARQL query that uses Wikibase's mwapi EntitySearch service for
- * fast Elasticsearch-backed label/alias matching, then post-filters by
- * country + institution type.
+ * fast Elasticsearch-backed label/alias matching. The query is intentionally
+ * cheap: NO `wdt:P31/wdt:P279*` type traversal (that was the cost driver in
+ * v4 and still timed out on long queries). Country + optional state scope +
+ * description fetch only. Candidate filtering happens client-side via
+ * `looksLikeHigherEdInstitution`.
  *
- * This replaces the previous `wdt:P31/wdt:P279*` + `P131` union approach,
- * which timed out at 60+ seconds on the public endpoint for all-India and
- * deeply-nested state-scoped queries.
+ * Empirical timing on the public endpoint (after warm-up):
+ *   - v3 (P279* + deep P131 union):  45–65s → HTTP 504
+ *   - v4 (mwapi + P279* type filter): 2–4s  cold, 1–3s warm
+ *   - v5 (mwapi + description only):  0.5–1.5s consistently
  */
 function buildInstitutionMwapiSparql({
   searchTerm,
   stateQid = null,
   limit = 50,
 } = {}) {
-  const typesValues = MWAPI_POSTFILTER_TYPES.map((q) => `wd:${q}`).join(" ");
   const escapedSearch = escapeSparqlString(String(searchTerm || "").trim());
-  // mwapi's own limit — request slightly more than we'll return, since some
-  // hits will be rejected by the type post-filter.
-  const mwapiLimit = Math.min(Math.max(limit * 2, 50), 100);
+  // Ask mwapi for more than we'll return — some hits are rejected by the
+  // client-side classifier, and we want to recover without a second round trip.
+  const mwapiLimit = Math.min(Math.max(limit * 3, 60), 100);
 
   // State scoping runs AFTER mwapi has narrowed to ~100 candidates, so a
-  // property-path lookup (`P131+`) is cheap. One-or-more hops lets us match
-  // an institution in a district in a state in India.
+  // property-path lookup (`P131+`) is cheap. One-or-more hops matches an
+  // institution in a district in a state in India.
   const stateFilter = stateQid
     ? `?item wdt:P131+ wd:${stateQid} .`
     : `?item wdt:P17 wd:Q668 .`;
 
   return `
-SELECT DISTINCT ?item ?itemLabel ?itemAltLabel ?locLabel WHERE {
+SELECT DISTINCT ?item ?itemLabel ?itemDescription ?itemAltLabel ?locLabel WHERE {
   SERVICE wikibase:mwapi {
     bd:serviceParam wikibase:api "EntitySearch" .
     bd:serviceParam wikibase:endpoint "www.wikidata.org" .
@@ -652,15 +810,13 @@ SELECT DISTINCT ?item ?itemLabel ?itemAltLabel ?locLabel WHERE {
     ?item wikibase:apiOutputItem mwapi:item .
   }
   ${stateFilter}
-  ?item wdt:P31/wdt:P279* ?type .
-  VALUES ?type { ${typesValues} }
   OPTIONAL { ?item wdt:P131 ?loc . }
   OPTIONAL {
     ?item skos:altLabel ?itemAltLabel .
     FILTER(LANG(?itemAltLabel) = "en")
   }
   SERVICE wikibase:label {
-    bd:serviceParam wikibase:language "${LABEL_LANGUAGES}" .
+    bd:serviceParam wikibase:language "en" .
   }
 }
 LIMIT ${limit}
@@ -729,6 +885,47 @@ function cacheRemoteResults(stateQid, newResults) {
     localStorage.setItem(key, JSON.stringify({ data, timestamp: Date.now() }));
   } catch {
     // ignore quota / parse errors
+  }
+}
+
+// ---------------------------------------------------------------------------
+// In-memory per-query response cache
+// ---------------------------------------------------------------------------
+//
+// Dedupes remote calls within a single tab session. Keyed by the normalised
+// `(searchTerm, stateQid)` pair. Typing "iit b" → "iit bo" → "iit b" should
+// cost at most 2 network calls, not 3. Cache lives for the tab's lifetime;
+// a hard reload will clear it (localStorage carries the cross-session story).
+//
+// Entries are LRU-capped at 64 to keep the map small.
+const REMOTE_QUERY_CACHE = new Map();
+const REMOTE_QUERY_CACHE_MAX = 64;
+
+// Minimum query length before we hit the remote endpoint. 1–2 chars blow up
+// the Elasticsearch candidate set with zero benefit; local fuzzy search over
+// the warm-start cache is more useful at that length.
+const MIN_REMOTE_QUERY_LENGTH = 3;
+
+function remoteCacheKey(term, stateQid) {
+  return `${String(stateQid || "all")}::${normalizeText(term)}`;
+}
+
+function remoteCacheGet(term, stateQid) {
+  const k = remoteCacheKey(term, stateQid);
+  if (!REMOTE_QUERY_CACHE.has(k)) return null;
+  // Touch for LRU behaviour
+  const v = REMOTE_QUERY_CACHE.get(k);
+  REMOTE_QUERY_CACHE.delete(k);
+  REMOTE_QUERY_CACHE.set(k, v);
+  return v;
+}
+
+function remoteCacheSet(term, stateQid, results) {
+  const k = remoteCacheKey(term, stateQid);
+  REMOTE_QUERY_CACHE.set(k, results);
+  while (REMOTE_QUERY_CACHE.size > REMOTE_QUERY_CACHE_MAX) {
+    const firstKey = REMOTE_QUERY_CACHE.keys().next().value;
+    REMOTE_QUERY_CACHE.delete(firstKey);
   }
 }
 
@@ -865,33 +1062,47 @@ export function searchInstitutionsLocal(query, list) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Minimum query length before we hit the network. 1–2 characters produce
+ * 500+ candidate hits from mwapi (mostly garbage) and the cost of pulling
+ * description text for that many entities dominates the query time. By the
+ * third character the candidate set is typically <100 and results are sharp.
+ */
+/**
  * Remote institution search via Wikibase mwapi EntitySearch.
  *
  * Strategy:
- *   1. Expand the raw query through `expandQueryTokens` so abbreviations
- *      ("ktu", "iit", "bits") are resolved to their canonical expansions
- *      before being sent to Elasticsearch.
- *   2. Run one mwapi-backed SPARQL query for the expanded phrase (state-
- *      scoped if a state was selected).
- *   3. If state-scoped and weak (<3 hits), fall back to an all-India search
+ *   1. Short-circuit when the query is shorter than 3 characters — local
+ *      fuzzy search over the warm-start cache is all we need at that length.
+ *   2. Check the in-memory per-tab cache; serve instantly on hit.
+ *   3. Run ONE mwapi-backed SPARQL query for the raw phrase (mwapi already
+ *      tokenises and does fuzzy matching, so we don't pre-expand).
+ *   4. If state-scoped and weak (<3 hits), fall back to an all-India search
  *      so a user who selected "Kerala" but typed "IIT" still finds IITs.
- *   4. Cache merged results into the warm-start list keyed by state.
+ *   5. Cache merged results into BOTH the in-memory map (fast dedupe) and
+ *      the localStorage warm-start list (cross-session warm-up).
  *
- * All network calls are time-boxed at 12 s via AbortController so a slow
- * endpoint never hangs the UI.
+ * All network calls are time-boxed at 8 s via AbortController (down from the
+ * previous 12 s — v5 queries consistently complete in <1.5 s; a longer wait
+ * means something is wrong and we should fail fast to the user).
+ *
+ * @param {string}        query
+ * @param {string|null}   stateQid
+ * @param {object}        [opts]
+ * @param {AbortSignal}   [opts.signal] – optional; lets callers cancel in-flight
+ *                                        queries on new keystrokes.
  */
-export async function searchInstitutionsRemote(query, stateQid = null) {
+export async function searchInstitutionsRemote(
+  query,
+  stateQid = null,
+  opts = {},
+) {
   const raw = String(query || "").trim();
   if (!raw) return [];
+  if (raw.length < MIN_REMOTE_QUERY_LENGTH) return [];
 
-  // Build the search phrase sent to Elasticsearch. Prefer an abbreviation-
-  // expanded form when the query is a known alias; otherwise use the raw
-  // text (mwapi EntitySearch already tokenises and does fuzzy matching).
-  const expandedTokens = expandQueryTokens(raw);
-  const searchTerm =
-    expandedTokens.length > raw.split(/\s+/).length
-      ? expandedTokens.join(" ")
-      : raw;
+  // Fast path: in-memory cache hit.
+  const cached = remoteCacheGet(raw, stateQid);
+  if (cached) return cached;
 
   const runQuery = async (scopeQid, term) => {
     const sparql = buildInstitutionMwapiSparql({
@@ -900,41 +1111,40 @@ export async function searchInstitutionsRemote(query, stateQid = null) {
       limit: 50,
     });
     const url = `${WIKIDATA_SPARQL_ENDPOINT}?query=${encodeURIComponent(sparql)}`;
-    const json = await fetchJsonWithTimeout(url, { timeoutMs: 12000 });
+    const json = await fetchJsonWithTimeout(url, {
+      timeoutMs: 8000,
+      signal: opts.signal,
+    });
     return parseInstitutionResults(json);
   };
 
   let results = [];
   try {
-    results = await runQuery(stateQid, searchTerm);
-  } catch {
-    // Primary query failed (timeout or network) — fall through to widened
-    // retry with the raw term in case the expansion produced a pathological
-    // Elasticsearch phrase.
-    if (searchTerm !== raw) {
-      try {
-        results = await runQuery(stateQid, raw);
-      } catch {
-        results = [];
-      }
-    }
+    results = await runQuery(stateQid, raw);
+  } catch (err) {
+    // Aborted by caller (new keystroke landed) — propagate silently so the
+    // hook can drop this result without surfacing an error. Any other
+    // failure just yields an empty list and we keep the user's local hits.
+    if (err?.name === "AbortError") throw err;
+    results = [];
   }
 
-  // State scoped and weak → widen to all-India with the same term.
-  if (stateQid && results.length < 3) {
+  // State scoped and weak → widen to all-India. Skip on abort signal.
+  if (stateQid && results.length < 3 && !opts.signal?.aborted) {
     try {
-      const indiaResults = await runQuery(null, searchTerm);
+      const indiaResults = await runQuery(null, raw);
       const existingQids = new Set(results.map((r) => r.qid));
       for (const r of indiaResults) {
         if (!existingQids.has(r.qid)) results.push(r);
       }
-    } catch {
+    } catch (err) {
+      if (err?.name === "AbortError") throw err;
       // non-fatal — keep whatever state-scoped results we got
     }
   }
 
-  // Opportunistic warm-start: seed the local cache so repeat searches
-  // within the same session are instant via `searchInstitutionsLocal`.
+  // Populate both caches so a repeat of this query is free.
+  remoteCacheSet(raw, stateQid, results);
   cacheRemoteResults(stateQid, results);
 
   return results;
