@@ -31,6 +31,9 @@ button, input, select, textarea { font: inherit; }
 .pdf-viewer { max-width: 100%; margin: 0 0 var(--space-4); overflow: auto; }
 .pdf-canvas { display: block; max-width: 100%; height: auto; }
 
+/* Camera: captured frames and crop canvases must stay within their container. */
+.camera-frame { display: block; max-width: 100%; height: auto; }
+
 /* Footer and toasts */
 .foot { border-top: var(--rule); color: var(--muted); font-size: var(--text-secondary); }
 .foot p { max-width: var(--measure); margin: 0 0 var(--space-2); }

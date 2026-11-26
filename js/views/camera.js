@@ -769,6 +769,7 @@ export class Camera extends Component {
         <div class="ls-slot">
           <video
             ref=${this.setVideo}
+            class="camera-frame"
             autoPlay
             playsInline
             muted
@@ -838,7 +839,7 @@ export class Camera extends Component {
       <h1>Review Pages</h1>
       <p class="ls-hint" role="status" aria-live="polite">Page ${currentIndex + 1} of ${total}</p>
       <div class="ls-card">
-        ${page ? html`<img src=${page.dataUrl} alt=${`Page ${currentIndex + 1}`} />` : null}
+        ${page ? html`<img class="camera-frame" src=${page.dataUrl} alt=${`Page ${currentIndex + 1}`} />` : null}
         ${busy ? html`<${Busy} label="Processing…" />` : null}
         <div class="ls-links">
           <button type="button" class="ls-btn ls-btn--small" onClick=${() => this.props.onCancel?.()}><${Icon} name="back" small=${true} /> Back</button>
@@ -882,6 +883,7 @@ export class Camera extends Component {
       <p class="ls-hint">Drag the corners to fit the paper edges. Preview updates live.</p>
       <div class="ls-card">
         <canvas
+          class="camera-frame"
           ref=${(element) => { this.sourceCanvas = element; }}
           role="img"
           aria-label="Paper corner handles"
@@ -890,7 +892,7 @@ export class Camera extends Component {
           onPointerUp=${(event) => this.handleCropPointerUp(event)}
           onPointerCancel=${(event) => this.handleCropPointerUp(event)}
         ></canvas>
-        <canvas ref=${(element) => { this.previewCanvas = element; }} role="img" aria-label="Cropped paper preview"></canvas>
+        <canvas class="camera-frame" ref=${(element) => { this.previewCanvas = element; }} role="img" aria-label="Cropped paper preview"></canvas>
       </div>
       <fieldset class="ls-field">
         <legend>Move corners with the keyboard</legend>
