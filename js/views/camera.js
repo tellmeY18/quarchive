@@ -108,6 +108,7 @@ export class Camera extends Component {
     this.draggingCorner = null;
     this.ocrRunFor = null;
     this.onKeyDown = this.onKeyDown.bind(this);
+    this.setVideo = this.setVideo.bind(this);
   }
 
   componentDidMount() {
@@ -153,7 +154,12 @@ export class Camera extends Component {
 
   setVideo(element) {
     this.video = element;
-    if (element && this.stream) element.srcObject = this.stream;
+    // A new ref callback on every render would make Preact reattach the same
+    // stream, resetting the video and dropping the preview. Only set it when
+    // the element actually changes streams.
+    if (element && this.stream && element.srcObject !== this.stream) {
+      element.srcObject = this.stream;
+    }
   }
 
   releasePages() {
@@ -761,7 +767,7 @@ export class Camera extends Component {
       <div class="ls-card">
         <div class="ls-slot">
           <video
-            ref=${(element) => this.setVideo(element)}
+            ref=${this.setVideo}
             autoPlay
             playsInline
             muted

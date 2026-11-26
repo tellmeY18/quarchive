@@ -44,7 +44,8 @@ test('no inline scripts, styles or event handlers; the CSP allows only the hosts
   assert.match(csp, /script-src 'self'(;|$)/);
   assert.match(csp, /style-src 'self'(;|$)/);
   assert.match(csp, /connect-src 'self' https:\/\/archive\.org https:\/\/query\.wikidata\.org(;|$)/);
-  assert.match(csp, /img-src 'self' https:\/\/archive\.org https:\/\/\*\.archive\.org(;|$)/);
+  assert.match(csp, /img-src 'self' blob: https:\/\/archive\.org https:\/\/\*\.archive\.org(;|$)/);
+  assert.match(csp, /worker-src 'self' blob:(;|$)/);
   assert.match(headers, /Permissions-Policy: .*geolocation=\(self\)/);
   assert.ok(!/unsafe-/.test(csp), 'no unsafe CSP directives');
   assert.ok(!/unpkg|cdnjs|jsdelivr|googleapis/.test(csp), 'no CDN');

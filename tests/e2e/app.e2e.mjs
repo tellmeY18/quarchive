@@ -37,7 +37,10 @@ const server = http.createServer(async (req, res) => {
 });
 await new Promise((done) => server.listen(0, '127.0.0.1', done));
 const base = `http://127.0.0.1:${server.address().port}`;
-const browser = await chromium.launch({ executablePath: process.env.CHROME, args: ['--no-sandbox'] });
+const browser = await chromium.launch({
+  executablePath: process.env.CHROME,
+  args: ['--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+});
 test.after(async () => {
   await browser.close();
   server.close();
@@ -357,6 +360,28 @@ test('bulk: two PDFs are validated, prepared and uploaded through the same proxy
   await page.waitForFunction(() => [...document.querySelectorAll('main article .ls-chip')]
     .filter((chip) => chip.textContent.includes('Done')).length === 2);
   assert.equal(uploads.length, 2);
+  assert.deepEqual(outside, []);
+  assert.deepEqual(violations, []);
+  await context.close();
+});
+
+test('camera: the preview keeps playing across renders and a page can be captured', async () => {
+  const { page, context, outside, violations } = await open('#/upload', {
+    storage: authStorage,
+  });
+  await page.getByRole('button', { name: 'Capture page' }).waitFor();
+  await page.waitForFunction(() => {
+    const video = document.querySelector('video');
+    return !!video && video.readyState >= 2 && video.videoWidth > 0 && !video.paused;
+  });
+  await page.getByRole('button', { name: 'Capture page' }).click();
+  await page.getByText('1 page').waitFor();
+  await page.getByRole('button', { name: 'Done (1)' }).click();
+  await page.getByRole('heading', { name: 'Review Pages' }).waitFor();
+  await page.getByRole('button', { name: 'Use These Pages' }).click();
+  await page.getByRole('heading', { name: 'PDF Ready' }).waitFor();
+  await page.getByRole('button', { name: /Looks Good/ }).click();
+  await page.getByText('scanned-paper.pdf').waitFor();
   assert.deepEqual(outside, []);
   assert.deepEqual(violations, []);
   await context.close();

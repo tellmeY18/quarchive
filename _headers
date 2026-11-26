@@ -3,4 +3,4 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   Permissions-Policy: camera=(self), microphone=(), geolocation=(self)
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; manifest-src 'self'; img-src 'self' https://archive.org https://*.archive.org; connect-src 'self' https://archive.org https://query.wikidata.org; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; manifest-src 'self'; img-src 'self' blob: https://archive.org https://*.archive.org; connect-src 'self' https://archive.org https://query.wikidata.org; worker-src 'self' blob:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
