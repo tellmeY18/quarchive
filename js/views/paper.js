@@ -181,9 +181,9 @@ export class Paper extends Component {
       ${paper.title && paper.description ? html`<p class="ls-hint">${paper.title}</p>` : null}
       <${TagList} tags=${tags} label="Paper details" />
 
-      ${paperThumbnail(id) ? html`<p><img src=${paperThumbnail(id)} alt=${`Cover of ${title}`} loading="lazy" /></p>` : null}
+      ${paperThumbnail(id) ? html`<p><img class="camera-frame" src=${paperThumbnail(id)} alt=${`Cover of ${title}`} loading="lazy" /></p>` : null}
 
-      <div>
+      <div class="ls-links">
         ${downloadUrl ? html`<a class="ls-btn ls-btn--primary" href=${downloadUrl} target="_blank" rel="noopener noreferrer">
           <${Icon} name="download" small=${true} /> Download PDF
         </a>` : null}

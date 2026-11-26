@@ -17,14 +17,16 @@ button, input, select, textarea { font: inherit; }
 
 /* Paper cards: a responsive grid, one column on a phone. */
 .paper-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr)); gap: var(--space-3); margin: 0 0 var(--space-4); padding: 0; list-style: none; }
-.paper-card { display: flex; flex-direction: column; gap: var(--space-2); min-height: var(--touch-preferred); margin: 0; padding: var(--space-3); border: var(--hair); }
-.paper-card > :last-child { margin-bottom: 0; }
-.paper-title { overflow-wrap: anywhere; }
-.paper-meta { color: var(--muted); font-size: var(--text-secondary); }
+.paper-card { min-height: var(--touch-preferred); margin: 0; border: var(--hair); }
+.paper-card > a, .paper-card > button { display: flex; gap: var(--space-3); align-items: flex-start; width: 100%; min-height: var(--touch-preferred); padding: var(--space-3); border: 0; background: none; color: inherit; font: inherit; text-align: left; text-decoration: none; cursor: pointer; }
+.paper-card > a:hover, .paper-card > button:hover { background: var(--wash, transparent); }
+.paper-card img { display: block; flex: none; max-width: 100%; height: auto; }
+.paper-title { display: block; overflow-wrap: anywhere; }
+.paper-meta { display: block; color: var(--muted); font-size: var(--text-secondary); }
 @media (max-width: 480px) { .paper-grid { grid-template-columns: 1fr; } }
 
 /* Bottom navigation sits above the safe area and never covers the last card. */
-.bottom-nav { position: sticky; bottom: 0; z-index: 6; }
+.bottom-nav { position: sticky; bottom: 0; z-index: 6; background: var(--page); border-top: var(--rule); }
 .page--with-nav { padding-bottom: calc(var(--space-8) + env(safe-area-inset-bottom)); }
 
 /* Paper preview: pdf.js draws into a canvas; the wrapper scrolls on narrow screens. */
@@ -33,16 +35,19 @@ button, input, select, textarea { font: inherit; }
 
 /* Camera: captured frames and crop canvases must stay within their container. */
 .camera-frame { display: block; max-width: 100%; height: auto; }
+.ls-links > .ls-input, .ls-links > .ls-select { flex: 1 1 12rem; min-width: 0; }
 
 /* Footer and toasts */
-.foot { border-top: var(--rule); color: var(--muted); font-size: var(--text-secondary); }
-.foot p { max-width: var(--measure); margin: 0 0 var(--space-2); }
+.foot { border-top: var(--rule); color: var(--muted); font-size: var(--text-secondary); padding: var(--space-4) var(--pad, var(--space-4)); }
+.foot > * { max-width: 960px; margin-left: auto; margin-right: auto; }
+.foot p { max-width: min(var(--measure), 960px); margin-bottom: var(--space-2); }
 .toast-wrap { position: fixed; z-index: 20; left: 0; right: 0; bottom: calc(var(--space-5) + env(safe-area-inset-bottom)); display: flex; justify-content: center; pointer-events: none; }
+.toast-wrap > * { pointer-events: auto; }
 
 /* Support sheet: layout only; QR stays black on white so cameras can read it. */
 .segmented { display: inline-flex; }
 .segmented .ls-btn + .ls-btn { margin-left: -2px; }
-.segmented .ls-btn[aria-pressed="true"] { color: var(--page); background: var(--ink); }
+.segmented .ls-btn[aria-pressed="true"], .ls-chip[aria-pressed="true"] { color: var(--page); background: var(--ink); }
 .segmented.wrap { flex-wrap: wrap; margin-bottom: var(--space-3); }
 .segmented.wrap .ls-btn { margin: 0 -2px -2px 0; }
 .support > p { margin: var(--space-2) 0 var(--space-3); }

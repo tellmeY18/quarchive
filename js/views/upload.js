@@ -136,7 +136,7 @@ function DuplicateCard({ item }) {
     .filter(Boolean)
     .join(' \u00b7 ');
   return html`<div class="ls-card">
-    ${identifier ? html`<img src=${paperThumbnail(identifier)} alt="" loading="lazy" />` : null}
+    ${identifier ? html`<img class="camera-frame" src=${paperThumbnail(identifier)} alt="" loading="lazy" />` : null}
     <h3>${title}</h3>
     ${details ? html`<p class="ls-hint">${details}</p>` : null}
     ${identifier ? html`<p><a class="ls-out" href=${paperItemUrl(identifier)} target="_blank" rel="noopener noreferrer">View on Archive.org <${Icon} name="external" small=${true} /></a></p>` : null}

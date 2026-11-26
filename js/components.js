@@ -16,16 +16,21 @@ export function Field({ label, id, hint, error, children, optional }) {
   </div>`;
 }
 
-export function Sheet({ title, onClose, children, footer }) {
-  return html`<dialog class="ls-sheet" open role="dialog" aria-modal="true" aria-label=${title} onCancel=${(e) => { e.preventDefault(); onClose(); }}>
-    <div class="ls-sheet__handle" aria-hidden="true"></div>
-    <div class="ls-sheet__head">
-      <h2>${title}</h2>
-      <button type="button" class="ls-btn ls-btn--small" aria-label="Close" onClick=${onClose}><${Icon} name="close" small=${true} /></button>
-    </div>
-    <div class="ls-sheet__body">${children}</div>
-    ${footer ? html`<div class="ls-sheet__foot">${footer}</div>` : null}
-  </dialog>`;
+export class Sheet extends Component {
+  dialog = null;
+  componentDidMount() { if (this.dialog && !this.dialog.open) this.dialog.showModal(); }
+  componentWillUnmount() { if (this.dialog?.open) this.dialog.close(); }
+  render({ title, onClose, children, footer }) {
+    return html`<dialog class="ls-sheet" ref=${(el) => { this.dialog = el; }} aria-label=${title} onCancel=${(e) => { e.preventDefault(); onClose(); }}>
+      <div class="ls-sheet__handle" aria-hidden="true"></div>
+      <div class="ls-sheet__head">
+        <h2>${title}</h2>
+        <button type="button" class="ls-btn ls-btn--small" aria-label="Close" onClick=${onClose}><${Icon} name="close" small=${true} /></button>
+      </div>
+      <div class="ls-sheet__body">${children}</div>
+      ${footer ? html`<div class="ls-sheet__foot">${footer}</div>` : null}
+    </dialog>`;
+  }
 }
 
 export function TagList({ tags, label }) {
@@ -48,7 +53,7 @@ export function Notice({ kind, icon, children, action }) {
   return html`<div class=${`ls-callout ls-callout--${variant}`} role=${variant === 'error' ? 'alert' : 'status'}>
     <${Icon} name=${name} small=${true} />
     <div>
-      <p>${children}</p>
+      <div>${children}</div>
       ${action ? html`<button type="button" class="ls-btn ls-btn--small" onClick=${action.onClick}>${action.label}</button>` : null}
     </div>
   </div>`;
@@ -78,8 +83,8 @@ export function PaperCard({ paper, onClick }) {
     </span>`;
   return html`<li class="paper-card">
     ${onClick
-      ? html`<button type="button" class="ls-btn" onClick=${onClick} aria-label=${`Open ${title}`}>${inner}</button>`
-      : html`<a class="ls-out" href=${paperItemUrl(identifier)} target="_blank" rel="noopener noreferrer">${inner}</a>`}
+      ? html`<button type="button" onClick=${onClick} aria-label=${`Open ${title}`}>${inner}</button>`
+      : html`<a href=${paperItemUrl(identifier)} target="_blank" rel="noopener noreferrer">${inner}</a>`}
   </li>`;
 }
 

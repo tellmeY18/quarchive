@@ -52,9 +52,11 @@ export class Browse extends Component {
       ${!state.loading && !state.error && !visible.length ? html`<${Empty} title="No universities available">Try again later.</${Empty}>` : null}
       ${visible.length ? html`<ul class="paper-grid">
         ${visible.map((uni) => html`<li key=${uni.qid} class="paper-card">
-          <a class="ls-out" href=${homeLink({ university: uni.qid, universityName: uni.label })}>
-            <span>${uni.label}</span>
-            ${uni.altLabel ? html`<span class="ls-hint">${uni.altLabel}</span>` : null}
+          <a href=${homeLink({ university: uni.qid, universityName: uni.label })}>
+            <span>
+              <span class="paper-title">${uni.label}</span>
+              ${uni.altLabel ? html`<span class="paper-meta">${uni.altLabel}</span>` : null}
+            </span>
           </a>
         </li>`)}
       </ul>` : null}
@@ -66,14 +68,14 @@ export class Browse extends Component {
       <h2>By Year</h2>
       <ul class="paper-grid">
         ${years().map((year) => html`<li key=${year} class="paper-card">
-          <a class="ls-out" href=${homeLink({ year })}>${year}</a>
+          <a href=${homeLink({ year })}><span class="paper-title">${year}</span></a>
         </li>`)}
       </ul>
 
       <h2>By Exam Type</h2>
       <ul class="paper-grid">
         ${EXAM_TYPES.map(([value, label]) => html`<li key=${value} class="paper-card">
-          <a class="ls-out" href=${homeLink({ examType: value })}>${label}</a>
+          <a href=${homeLink({ examType: value })}><span class="paper-title">${label}</span></a>
         </li>`)}
       </ul>
     </section>`;

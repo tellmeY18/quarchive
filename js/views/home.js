@@ -143,9 +143,10 @@ export class Home extends Component {
 
   clearFilters() {
     const filters = {};
-    const next = { ...this.state, filters };
-    this.setState({ filters });
+    const next = { ...this.state, filters, universityName: '' };
+    this.setState({ filters, universityName: '' });
     this.runSearch(next, 1, false);
+    if (this.props.navigate) this.props.navigate('home', {});
   }
 
   clearUniversity() {
@@ -196,7 +197,7 @@ export class Home extends Component {
         <p>Search, browse, and download university exam papers. Free forever, powered by the Internet Archive.</p>
         <div class="ls-field">
           <label class="ls-vh" for="home-search">Search papers</label>
-          <div>
+          <div class="ls-links">
             <input id="home-search" class="ls-input" type="search" value=${state.text}
               placeholder="Search by university, course, or year..." onInput=${this.onInput}
               onKeyDown=${this.onKeyDown} />
