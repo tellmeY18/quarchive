@@ -4,8 +4,10 @@ import { Icon } from './icons.js';
 import { parseHash, formatRoute } from './route.js';
 import { loadAuth, validateAuth } from './auth.js';
 import { APP_VERSION, REPO_URL } from './config.js';
-import { checkForUpdate } from './update.js';
+import { apply, checkForUpdate, justUpdated, updateState } from './update.js';
 import { Sheet } from './components.js';
+import { SUPPORT, PRESETS, parseAmount, formatRupees, supportLinks } from './support.js';
+import { drawQR } from './qr.js';
 import Home from './views/home.js';
 import Browse from './views/browse.js';
 import Paper from './views/paper.js';
@@ -42,6 +44,8 @@ export class App extends Component {
       authOpen: false,
       toast: null,
       theme: this.readTheme(),
+      checking: false,
+      supportOpen: false,
     };
     this.toastTimer = null;
     this.toastId = 0;
@@ -54,6 +58,8 @@ export class App extends Component {
     this.closeAuth = this.closeAuth.bind(this);
     this.toggleTheme = this.toggleTheme.bind(this);
     this.go = this.go.bind(this);
+    this.openSupport = this.openSupport.bind(this);
+    this.closeSupport = this.closeSupport.bind(this);
   }
 
   readTheme() {
@@ -67,6 +73,7 @@ export class App extends Component {
   componentDidMount() {
     window.addEventListener('hashchange', this.onHashChange);
     window.addEventListener('quarchive-update', this.onUpdate);
+    if (justUpdated()) this.notify(`Updated to ${APP_VERSION}`, 'success', 3000);
 
     const stored = loadAuth();
     if (stored) {
@@ -93,6 +100,7 @@ export class App extends Component {
 
   onUpdate() {
     this.notify('A new version is ready — reload to apply.', 'info', 6000);
+    this.forceUpdate();
   }
 
   go(view, params = {}) {
@@ -129,6 +137,14 @@ export class App extends Component {
 
   closeAuth() {
     this.setState({ authOpen: false });
+  }
+
+  openSupport() {
+    this.setState({ supportOpen: true });
+  }
+
+  closeSupport() {
+    this.setState({ supportOpen: false });
   }
 
   toggleTheme() {
@@ -183,7 +199,10 @@ export class App extends Component {
       <footer class="foot">
         <p>An open-source archive of previous year university exam question papers.</p>
         <div class="ls-links">
-          <button type="button" class="ls-btn ls-btn--small" onClick=${() => this.checkVersion()}>Version ${APP_VERSION}</button>
+          ${updateState.ready
+            ? html`<button type="button" class="ls-btn ls-btn--small" onClick=${apply}>Update ready: restart</button>`
+            : html`<button type="button" class="ls-btn ls-btn--small" disabled=${state.checking} onClick=${() => this.checkUpdates()} aria-label=${`Version ${APP_VERSION}, check for updates`}>${APP_VERSION}</button>`}
+          <button type="button" class="ls-btn ls-btn--small" onClick=${this.openSupport}>Support</button>
           <a class="ls-out" href=${REPO_URL} target="_blank" rel="noopener noreferrer">Source</a>
           <a class="ls-out" href="#/about">About</a>
         </div>
@@ -213,13 +232,81 @@ export class App extends Component {
       ${state.authOpen ? html`<${Sheet} title="Sign in" onClose=${this.closeAuth}>
         <${AuthView} auth=${state.auth} setAuth=${this.setAuth} close=${this.closeAuth} notify=${this.notify} />
       </${Sheet}>` : null}
+
+      ${state.supportOpen ? html`<${SupportDialog} onClose=${this.closeSupport} onCopied=${() => this.notify('Copied')} />` : null}
     </div>`;
   }
 
-  checkVersion() {
+  checkUpdates() {
+    this.setState({ checking: true });
     checkForUpdate({ force: true })
-      .then(() => this.notify(`Quarchive ${APP_VERSION}`))
-      .catch(() => this.notify(`Quarchive ${APP_VERSION}`));
+      .then((result) => {
+        this.setState({ checking: false });
+        const message = result === 'ready' ? 'Update found' : result === 'offline' ? 'Offline' : result === 'skipped' ? 'Updates need HTTPS' : 'Up to date';
+        this.notify(message);
+      })
+      .catch(() => this.setState({ checking: false }));
+  }
+}
+
+class SupportDialog extends Component {
+  state = { amount: PRESETS[1], text: '' };
+  dialog = null;
+  qr = null;
+
+  componentDidMount() {
+    this.dialog.addEventListener('close', this.onClose);
+    this.dialog.showModal();
+    this.paint();
+  }
+
+  componentWillUnmount() {
+    this.dialog.removeEventListener('close', this.onClose);
+    if (this.dialog.open) this.dialog.close();
+  }
+
+  componentDidUpdate() {
+    this.paint();
+  }
+
+  onClose = () => this.props.onClose?.();
+
+  paise() {
+    const { amount, text } = this.state;
+    return text.trim() ? parseAmount(text) : amount;
+  }
+
+  paint() {
+    const links = this.paise() && supportLinks(this.paise());
+    if (this.qr) {
+      if (links) drawQR(this.qr, links.generic, `UPI QR code for ${formatRupees(this.paise())}`);
+      else this.qr.replaceChildren();
+    }
+  }
+
+  copy = async () => {
+    try { await navigator.clipboard.writeText(SUPPORT.upi); this.props.onCopied?.(); } catch { /* clipboard blocked */ }
+  };
+
+  render(_, { amount, text }) {
+    const paise = this.paise();
+    const links = paise ? supportLinks(paise) : null;
+    return html`<dialog class="ls-sheet support" ref=${el => { this.dialog = el; }} aria-labelledby="support-title">
+      <div class="ls-sheet__head">
+        <h2 id="support-title">Love this software ?</h2>
+        <button class="ls-btn" type="button" onClick=${() => this.dialog.close()} aria-label="Close"><${Icon} name="close" /></button>
+      </div>
+      <p>I love it too... I'd ideally keep on making such simple stupid apps for making life easier.. help support my efforts by donating so I can keep on maintaining this.</p>
+      <div class="segmented wrap" role="group" aria-label="Amount">${PRESETS.map(p => html`<button type="button" class="ls-btn" aria-pressed=${!text.trim() && amount === p} onClick=${() => this.setState({ amount: p, text: '' })}>${formatRupees(p)}</button>`)}</div>
+      <div class="ls-field">
+        <label for="support-amount">Any amount (₹)</label>
+        <input id="support-amount" class="ls-input" type="text" inputmode="decimal" autocomplete="off" placeholder="75" value=${text} onInput=${e => this.setState({ text: e.target.value })} aria-invalid=${text.trim() && !paise ? 'true' : 'false'} />
+      </div>
+      ${links ? html`<a class="ls-btn ls-btn--primary ls-btn--outbound" href=${links.generic} onClick=${() => this.props.onClose?.()}>Donate ${formatRupees(paise)}</a>` : null}
+      <div class="upi-id"><b>${SUPPORT.upi}</b><button class="ls-btn ls-btn--small" type="button" onClick=${this.copy} aria-label="Copy UPI ID"><${Icon} name="link" small /></button></div>
+      ${links ? html`<details class="other-apps"><summary>Other UPI apps</summary><ul class="recent">${links.apps.map(a => html`<li><a href=${a.href} onClick=${() => this.props.onClose?.()}>${a.name}</a></li>`)}</ul></details>` : null}
+      <div class="qr" ref=${el => { this.qr = el; }}></div>
+    </dialog>`;
   }
 }
 

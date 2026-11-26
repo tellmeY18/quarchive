@@ -545,7 +545,7 @@ describe('wikidata', () => {
     assert.match(cacheKey('Q123'), /^quarchive_institutions_.*_state_Q123$/)
   })
 
-  test('getInstitutionList reads a fresh warm-start cache', async () => {
+  test('getInstitutionList reads a fresh warm-start cache, bootstraps when cold', async () => {
     const storage = fakeStorage()
     const items = [{ qid: 'Q1', label: 'Test University' }]
     saveJSON(cacheKey(null), { data: items, timestamp: 1000 }, { storage })
@@ -553,10 +553,13 @@ describe('wikidata', () => {
       await getInstitutionList(null, { storage, now: () => 1500 }),
       items,
     )
+    const emptySparql = { results: { bindings: [] } }
+    const fetchImpl = async () => new Response(JSON.stringify(emptySparql), { status: 200, headers: { 'content-type': 'application/sparql-results+json' } })
     assert.deepEqual(
       await getInstitutionList(null, {
         storage,
         now: () => 8 * 24 * 60 * 60 * 1000 + 1000,
+        fetchImpl,
       }),
       [],
     )

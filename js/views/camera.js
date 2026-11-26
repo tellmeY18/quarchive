@@ -763,6 +763,7 @@ export class Camera extends Component {
       );
     }
     return html`<section aria-label="Scan question paper">
+      <p><button type="button" class="ls-btn ls-btn--small" onClick=${() => this.props.onCancel?.()}><${Icon} name="back" small=${true} /> Back</button></p>
       <h1>Scan Question Paper</h1>
       <div class="ls-card">
         <div class="ls-slot">
@@ -840,7 +841,8 @@ export class Camera extends Component {
         ${page ? html`<img src=${page.dataUrl} alt=${`Page ${currentIndex + 1}`} />` : null}
         ${busy ? html`<${Busy} label="Processing…" />` : null}
         <div class="ls-links">
-          <button type="button" class="ls-btn ls-btn--small" onClick=${() => this.handleReviewRetake()}><${Icon} name="back" small=${true} /> Retake</button>
+          <button type="button" class="ls-btn ls-btn--small" onClick=${() => this.props.onCancel?.()}><${Icon} name="back" small=${true} /> Back</button>
+          <button type="button" class="ls-btn ls-btn--small" onClick=${() => this.handleReviewRetake()}><${Icon} name="camera" small=${true} /> Retake</button>
           <button type="button" class="ls-btn ls-btn--small" disabled=${currentIndex <= 0} aria-label="Move page up" onClick=${() => this.movePage(-1)}><${Icon} name="prev" small=${true} /> Move up</button>
           <button type="button" class="ls-btn ls-btn--small" disabled=${currentIndex >= total - 1} aria-label="Move page down" onClick=${() => this.movePage(1)}><${Icon} name="next" small=${true} /> Move down</button>
           <button type="button" class="ls-btn ls-btn--small" disabled=${currentIndex <= 0} aria-label="Previous page" onClick=${() => this.goToPage(currentIndex - 1)}>Previous</button>
@@ -940,7 +942,8 @@ export class Camera extends Component {
         ${ocrStatus === 'failed' ? html`<${Notice} kind="warning" icon="info">Reading the page failed — you can enter the details by hand.<//>` : null}
         ${error ? html`<${Notice} kind="error" icon="alert">${error}<//>` : null}
         <div class="ls-links">
-          <button type="button" class="ls-btn" onClick=${() => this.handlePreviewRetake()}><${Icon} name="back" small=${true} /> Retake</button>
+          <button type="button" class="ls-btn" onClick=${() => this.props.onCancel?.()}><${Icon} name="back" small=${true} /> Back</button>
+          <button type="button" class="ls-btn" onClick=${() => this.handlePreviewRetake()}><${Icon} name="camera" small=${true} /> Retake</button>
           <button type="button" class="ls-btn ls-btn--primary" onClick=${() => this.props.onComplete?.(pdfBlob, ocrStatus)}>Looks Good <${Icon} name="check" small=${true} /></button>
         </div>
       </div>

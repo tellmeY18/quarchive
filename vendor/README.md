@@ -16,6 +16,7 @@ this directory.
 | `browser-image-compression/browser-image-compression.mjs`, `…/LICENSE` | browser-image-compression **2.0.2** | `https://registry.npmjs.org/browser-image-compression/-/browser-image-compression-2.0.2.tgz` | Upstream `dist/browser-image-compression.mjs`, with the trailing source-map directive removed and two CSP patches (below). |
 | `scribe/` | scribe.js-ocr **0.10.1** | `https://registry.npmjs.org/scribe.js-ocr/-/scribe.js-ocr-0.10.1.tgz` | `scribe.js`, `js/`, `mupdf/`, `lib/`, `tess/`, `fonts/` and `LICENSE` (the exact set from `scripts/copy-scribe-assets.mjs`), preserving upstream relative paths. |
 | `scribe/tess/eng.traineddata.gz` | @tesseract.js-data/eng **1.0.0** (`4.0.0_best_int/` data) | `https://registry.npmjs.org/@tesseract.js-data/eng/-/eng-1.0.0.tgz` | Added so OCR never needs a network fallback; the scribe npm package does not ship any `.traineddata`. |
+| `qrcode.js`, `qrcode.LICENSE` | qrcode-generator (Kazuhiko Arase) | copied byte-for-byte from `~/letsimplfyi/commoner/vendor/` | Classic browser script that exposes `window.qrcode`; loaded on demand by `js/qr.js` for the UPI donation QR. |
 
 `npx esbuild@0.28.2` was **not** needed: every library above ships a prebuilt
 ESM browser build, which was copied rather than regenerated. If a future
@@ -102,6 +103,7 @@ cp tesseract.js-data-eng-1.0.0/package/4.0.0_best_int/eng.traineddata.gz \
   `scribe/fonts/readme.Md`; upstream ships no separate OFL text file.
   `scribe/tess/eng.traineddata.gz` comes from an MIT-licensed npm package; the
   underlying Tesseract language data is Apache-2.0 (see `naptha/tessdata`).
+- `qrcode.LICENSE` — MIT (Kazuhiko Arase, qrcode-generator).
 
 AGPL-3.0 is copyleft: keep `scribe/LICENSE` with the scribe assets and make the
 corresponding source available when distributing a build that includes it.

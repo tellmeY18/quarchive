@@ -21,7 +21,8 @@ test('branding is the vendored letsimpl.fyi brand, loaded before the app styles'
 
 test('app styles follow the brand rules: layout only, no colours, shadows, gradients, rounded corners or fonts of their own', () => {
   const css = read('styles.css').replace(/\/\*[\s\S]*?\*\//g, '');
-  assert.deepEqual(css.match(/#[\da-fA-F]{3,8}\b/g) || [], [], 'no hex colours');
+  const hex = (css.match(/#[\da-fA-F]{3,8}\b/g) || []).filter(c => c.toLowerCase() !== '#ffffff'); // QR codes stay white in both themes
+  assert.deepEqual(hex, [], 'no hex colours');
   assert.ok(!/box-shadow|drop-shadow|text-shadow/.test(css), 'no shadows');
   assert.ok(!/(linear|radial|conic)-gradient/.test(css), 'no gradients');
   assert.ok(!/border-radius:\s*[1-9]/.test(css), 'square corners');

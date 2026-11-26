@@ -44,7 +44,7 @@ tools/              sync-brand.mjs, serve.py
 .github/workflows/  Test + Cloudflare Pages deploy
 ```
 
-The `js/` modules are: `main.js`, `config.js`, `theme.js`, `update.js`, `icons.js`, `route.js`, `ui.js`, `components.js`, `pdfViewer.js`, `fetch.js`, `archive.js`, `auth.js`, `upload.js`, `metadata.js`, `metadataExtract.js`, `dedup.js`, `wikidata.js`, `indianStates.js`, `geolocation.js`, `store.js`, `capture.js`, `imageToPdf.js`, `ocr.js`, `bulk.js`, `constants.js`, and one module per screen in `views/`: `home.js`, `browse.js`, `paper.js`, `upload.js`, `camera.js`, `bulk.js`, `about.js`, `auth.js`.
+The `js/` modules are: `main.js`, `config.js`, `theme.js`, `update.js`, `icons.js`, `route.js`, `ui.js`, `components.js`, `pdfViewer.js`, `fetch.js`, `archive.js`, `auth.js`, `upload.js`, `metadata.js`, `metadataExtract.js`, `dedup.js`, `wikidata.js`, `indianStates.js`, `geolocation.js`, `store.js`, `capture.js`, `imageToPdf.js`, `ocr.js`, `bulk.js`, `constants.js`, `support.js`, `upi.js`, `qr.js`, and one module per screen in `views/`: `home.js`, `browse.js`, `paper.js`, `upload.js`, `camera.js`, `bulk.js`, `about.js`, `auth.js`.
 
 Every file under `js/`, `vendor/`, `brand/`, `icons/`, `workers/` and `data/` that the browser needs must be listed in `sw.js`'s `SHELL`, and must be mentioned in this file when it is a `js/` module. `tests/shell.test.js` enforces both.
 

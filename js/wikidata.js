@@ -849,8 +849,22 @@ export async function getInstitutionList(stateQid = null, deps = {}) {
     // ignore cache read errors
   }
 
-  // No bootstrap — return empty; remote search will populate results on demand
-  // and `cacheRemoteResults` below will grow the warm-start list over time.
+  // Cold cache: seed with a few cheap EntitySearch queries so Browse has a list.
+  const seeds = ['institute of technology', 'engineering college', 'medical college'];
+  try {
+    const batches = await Promise.all(seeds.map((q) => searchInstitutionsRemote(q, stateQid, { ...deps, limit: 30 })));
+    const seen = new Set();
+    const data = [];
+    for (const r of batches.flat()) {
+      if (r?.qid && !seen.has(r.qid)) { seen.add(r.qid); data.push(r); }
+    }
+    if (data.length) {
+      saveJSON(key, { data, timestamp: now() }, { storage: deps.storage });
+      return data;
+    }
+  } catch {
+    // ignore bootstrap errors
+  }
   return [];
 }
 
