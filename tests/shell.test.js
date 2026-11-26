@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+const bytes = path => readFileSync(new URL(`../${path}`, import.meta.url));
 const exists = path => existsSync(new URL(`../${path}`, import.meta.url));
 const filesIn = dir => {
   if (!exists(dir)) return null;
@@ -18,9 +20,15 @@ test('manifest icons exist and the page links its icons and scripts', () => {
   for (const [, href] of read('index.html').matchAll(/(?:href|src)="\.\/([^"]+)"/g)) assert.ok(exists(href), href);
 });
 
-test('icons are the quarchive brand kit copies (never redrawn here)', () => {
-  assert.match(read('icons/BRAND-README.md'), /quarchive/i);
+test('icons are unedited copies of the official Quarchive brand kit', () => {
+  const assets = JSON.parse(read('brand/brand.json')).assets;
+  assert.ok(assets && Object.keys(assets).length);
+  assert.deepEqual(filesIn('icons').sort(), Object.keys(assets).sort());
+  assert.match(read('icons/README.md'), /founder/i);
   assert.match(read('icons/favicon.svg'), /quarchive/i);
+  for (const [name, hash] of Object.entries(assets)) {
+    assert.equal(createHash('sha256').update(bytes(`icons/${name}`)).digest('hex'), hash, name);
+  }
 });
 
 test('service worker: precaches every runtime file, versions its cache with the app and leaves /api/* on the network', () => {

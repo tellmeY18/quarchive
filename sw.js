@@ -19,7 +19,12 @@ const SHELL = [
   './brand/fonts/courier-prime-400-latin.woff2', './brand/fonts/courier-prime-700-latin.woff2', './brand/fonts/noto-serif-malayalam.woff2',
   './vendor/preact.module.js', './vendor/htm.module.js', './vendor/pdf-lib/pdf-lib.mjs',
   './vendor/browser-image-compression/browser-image-compression.mjs', './vendor/pdfjs/pdf.mjs', './vendor/pdfjs/pdf.worker.mjs',
-  './icons/favicon.svg', './icons/logo-mark.svg', './icons/logo-mark-inverse.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-512-maskable.png', './icons/apple-touch-icon.png', './icons/og-image.png',
+  './icons/logo-primary.svg', './icons/logo-primary-inverse.svg', './icons/logo-mark.svg', './icons/logo-mark-inverse.svg',
+  './icons/logo-mono.svg', './icons/logo-mono-inverse.svg', './icons/favicon.svg', './icons/app-icon.svg',
+  './icons/app-icon-192.png', './icons/app-icon-512.png', './icons/apple-touch-icon-180.png', './icons/app-icon-maskable.svg',
+  './icons/app-icon-maskable-512.png', './icons/splash.svg', './icons/splash-1080x1920.png', './icons/loading.svg',
+  './icons/loading-1080x1920.png', './icons/og-image.svg', './icons/og-image.png', './icons/github-social.svg',
+  './icons/github-social.png', './icons/avatar-400.png',
 ];
 
 self.addEventListener('install', event => {

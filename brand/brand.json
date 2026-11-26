@@ -14,5 +14,30 @@
     "fonts/Atkinson-Hyperlegible-Next.OFL.txt": "474a034e99845062f661855caaa505880d0e9009deddc2727a92795eab374955",
     "fonts/Courier-Prime.OFL.txt": "9a755af092b494944c99f471be6fddd19b006a448fefdc4717e4ee0aa09a97b0",
     "fonts/Noto-Serif-Malayalam.OFL.txt": "1df18163a0bf60f02131401ba1609df90051f40c4047684dda1c8a2e9586f7f2"
+  },
+  "assets": {
+    "README.md": "6eb7a64832e51525b55d43ac814f23ff04173c8819c2bd62de07b50e2ae8e1d8",
+    "logo-primary.svg": "def5e7aaffbdbb0c2a18e28b78ad861cac194f057bfe8332e9b8e94677329c6d",
+    "logo-primary-inverse.svg": "2ca24d454acef99c2693535e0623c16f28290da4744da24667900bf4fbf420a0",
+    "logo-mark.svg": "e643c454eae6af5ed205b9707a30ad5e637a477eb7a0e89bcf73803028bdbaa3",
+    "logo-mark-inverse.svg": "6b95471012bf6a879e6c9139257e4e72c11af93eead537e88e0ee47743068adf",
+    "logo-mono.svg": "4583f7b5cbfb43cd453672cd0f0c6a7267e4b0afc5a62af19ce7e75069c90bb2",
+    "logo-mono-inverse.svg": "318938fd372cd5121ee058aab8155fadddded3067833ab00069e11c7342f7b5b",
+    "favicon.svg": "9c3bf30cda001c7624b56943e3c951eb6f7cb37860074887aa839d4f0bf22ba3",
+    "app-icon.svg": "fb21ec5c6a2588f4676135c2800b5c741aa3c86c5efaa75413cb69205f2ad3e6",
+    "app-icon-192.png": "b0fb5e9ae10a6969d2282131efdfeddbc6d8cbb2f5388e9d54df971a47dfbcfe",
+    "app-icon-512.png": "75920e174502342906f1764ba9625a75c420a74f7eaadcf2a1898887e31bcdb3",
+    "apple-touch-icon-180.png": "3dff035387808692326680b1b805391689eb6fdaf60c04ac601566705a489876",
+    "app-icon-maskable.svg": "c8b6650abc685e37d216a88127bbc05ea9730a9cf677db2104d03b63df9ba188",
+    "app-icon-maskable-512.png": "a2b8469f8fc6ebb0d9b637ef1ab4662c8237830a8858958699f6ecacf252289d",
+    "splash.svg": "4b16e2035026afd0ec655158f8d2e428161f5b15b733fa9fcac44998e03d6f0f",
+    "splash-1080x1920.png": "fbbf4555f5b6e365b0108058871b67f42bea3a0cac0661cc2f04c4bfb493fbe8",
+    "loading.svg": "2b2b99410de42630681b29b42b4474fd6b833bd43ba1817831c2456ace6bff2a",
+    "loading-1080x1920.png": "5658c4b392d36beba96c2eadd53ce28660cf87c213c94a381c11a3e96f212c88",
+    "og-image.svg": "092ee7af384510dec2eef6e644106c7dc7d1d56cad010a64cc1b5291403d4c30",
+    "og-image.png": "b5638beac91837f3bb768ceeb8a1f3e3a6d5967855e0882ba12697fa249a25b0",
+    "github-social.svg": "5fc8ecbf0c729dcd7d571a2ed9c51f0990c6de9e8d7590f6b97d41999c473554",
+    "github-social.png": "e558b0e37e631f20ad6422b7b2f687085e1e88111ac540651e7ddbc0ff14cc23",
+    "avatar-400.png": "11b597ab4c2522942c58e19027b5da8a8dd9ccdb946a4be50cd5c3a427ffb443"
   }
 }

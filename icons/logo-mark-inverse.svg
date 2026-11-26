@@ -1,10 +1,1 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24">
-  <title>quarchive logo mark, inverse</title>
-  <g fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">
-    <polygon points="12 2 19 5.5 12 9 5 5.5"/>
-    <polyline points="8.5 7.2 8.5 10.5 15.5 10.5 15.5 7.2"/>
-    <polyline points="8.5 10.5 6.5 18 15.5 18 15.5 17.5 19.5 15 15.5 12.5 15.5 10.5"/>
-    <line x1="12" y1="13.5" x2="13.5" y2="13.5"/>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 256 256" role="img" aria-label="quarchive mark, inverse"><title>quarchive mark, inverse</title><g><polygon points="128,25.069 215.847,60.146 128,95.222 40.153,60.146" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke="#FFFFFF" stroke-width="6"/><path d="M70.562 72.422 L70.562 100.991 C70.562 111.886 95.902 120.36 128 120.36 C160.098 120.36 185.438 111.886 185.438 100.991 L185.438 72.422" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke="#FFFFFF" stroke-width="6"/><line x1="215.847" y1="60.146" x2="215.847" y2="103.991" fill="none" stroke="#FFFFFF" stroke-width="6"/><ellipse cx="215.847" cy="112.76" rx="8.785" ry="7.6" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke="#FFFFFF" stroke-width="6"/><path d="M80.975 114.357 C69.64 125.611 62.668 140.922 62.668 157.793 C62.668 192.35 91.918 220.364 128 220.364 C164.082 220.364 193.332 192.35 193.332 157.793 C193.332 140.922 186.36 125.611 175.025 114.357" stroke-linecap="square" stroke-miterlimit="10" fill="none" stroke="#FFFFFF" stroke-width="6"/><ellipse cx="161.096" cy="142.436" rx="8.082" ry="9.978" fill="#FFFFFF" stroke="none"/><ellipse cx="94.904" cy="142.436" rx="8.082" ry="9.978" fill="#FFFFFF" stroke="none"/><path d="M146.317 163.377 C159.981 163.595 168.847 166.967 169.16 179.818 C169.611 197.937 149.993 196.835 128 196.842 C106.007 196.835 86.389 197.937 86.84 179.818 C87.153 166.967 96.019 163.595 109.683 163.377" stroke-miterlimit="10" fill="none" stroke="#FFFFFF" stroke-width="6"/><path d="M106.712 166.339 C106.557 157.568 115.821 148.603 128 148.589 C140.179 148.603 149.443 157.568 149.288 166.339" stroke-miterlimit="10" fill="none" stroke="#FFFFFF" stroke-width="6"/></g></svg>

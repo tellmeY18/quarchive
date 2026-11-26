@@ -39,6 +39,6 @@ Search and metadata come from Archive.org; institution search from Wikidata SPAR
 
 ## Identity kit
 
-The brand repo has no Quarchive asset kit. At the user's explicit request an AI subagent generated a provisional monoline duck-with-cap mark in `icons/` (favicon, logo mark, PWA icons and OG image). It follows the brand's black/white stroke style but **deviates from the brand repo rule that agents create no brand material**. It is pending founder review and should be promoted into `brand/assets/quarchive/` if accepted. The header wordmark itself remains live text in CSS, not an image.
+The official Quarchive kit — the founder's duck in a graduation cap — is vendored unedited from `https://brand.letsimpl.fyi/assets/quarchive/` into `icons/` by `npm run brand`. The header wordmark itself remains live text in CSS, not an image.
 
 This file contains no brand copy. Product words are kept to functional labels; founder-reviewed prose lives in `README.md`.

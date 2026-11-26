@@ -476,11 +476,10 @@ All three layers from CLAUDE.md §12 run per file, but with batch-specific UX:
 ## Phase 10 — Branding: Quackademic the Duck *(deferred)*
 
 > **Status: superseded.** Branding now follows https://brand.letsimpl.fyi, not the
-> yellow duck palette below. The user explicitly asked for a minimal monoline
-> duck-with-cap mark; `icons/` contains an agent-generated provisional kit pending
-> founder review. Bulk upload (Phase 9A) is implemented in code even though parts
-> of this roadmap still describe it as parked. The notes below are kept as the
-> historical plan of record, not as instructions for the current UI.
+> yellow duck palette below. The founder-drawn duck-with-cap kit is vendored from
+> the brand repo into `icons/`. Bulk upload (Phase 9A) is implemented in code even
+> though parts of this roadmap still describe it as parked. The notes below are
+> kept as the historical plan of record, not as instructions for the current UI.
 
 **Goal:** Give Quarchive a distinct, memorable visual identity built around the pun at the heart of the name — **Quack** + **Archive**. The mascot is **Quackademic**, a scholarly duck who keeps papers safe. Applies to logo, favicon, navigation, empty states, OG image, and README hero. Must respect the existing mobile-first, editorial aesthetic (CLAUDE.md §2).
 
