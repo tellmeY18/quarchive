@@ -1,7 +1,7 @@
 name: Deploy
 
 # Tests every push and pull request. Pushes to main deploy to Cloudflare Pages
-# (project "quarchive", site https://quarchive.pages.dev/).
+# (project "quarchive", site https://quarchive.letsimpl.fyi/).
 # Repository (or org) secrets: CLOUDFLARE_API_TOKEN (Pages: Edit) and CLOUDFLARE_ACCOUNT_ID.
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: production
-      url: https://quarchive.pages.dev
+      url: https://quarchive.letsimpl.fyi
     steps:
       - uses: actions/checkout@v4
       # Only runtime files are published; tests, tools and docs stay private.

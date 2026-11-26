@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
-const ALLOWED_HOSTS = new Set(['archive.org', 'brand.letsimpl.fyi', 'github.com', 'letsimpl.fyi', 'mozilla.github.io', 'pdf-lib.js.org', 'query.wikidata.org', 'quarchive.pages.dev', 'www.gnu.org', 'www.w3.org']);
+const ALLOWED_HOSTS = new Set(['archive.org', 'brand.letsimpl.fyi', 'github.com', 'letsimpl.fyi', 'mozilla.github.io', 'pdf-lib.js.org', 'query.wikidata.org', 'quarchive.letsimpl.fyi', 'www.gnu.org', 'www.w3.org']);
 const hostAllowed = host => ALLOWED_HOSTS.has(host) || /\.archive\.org$/.test(host);
 const jsFiles = readdirSync(new URL('../js/', import.meta.url), { withFileTypes: true })
   .flatMap(entry => entry.isDirectory()

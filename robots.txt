@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://quarchive.pages.dev/sitemap.xml
+Sitemap: https://quarchive.letsimpl.fyi/sitemap.xml
