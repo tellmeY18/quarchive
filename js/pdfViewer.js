@@ -43,7 +43,9 @@ export class PdfViewer extends Component {
   }
 
   componentDidUpdate(prevProps, prevState) {
-    if (this.state.page !== prevState.page && !this.state.loading && !this.state.error) {
+    const becameReady = prevState.loading && !this.state.loading && !this.state.error;
+    const pageChanged = this.state.page !== prevState.page;
+    if ((becameReady || pageChanged) && !this.state.loading && !this.state.error) {
       this.renderPage(this.state.page);
     }
   }
@@ -72,7 +74,6 @@ export class PdfViewer extends Component {
         if (!this.mounted) { doc.destroy(); return; }
         this.doc = doc;
         this.setState({ numPages: doc.numPages, page: 1, loading: false });
-        this.renderPage(1);
       })
       .catch((error) => {
         if (!this.mounted || error?.name === 'AbortException') return;
