@@ -1,7 +1,13 @@
 # CLAUDE.md — Previous Year Question Papers (PYQP) Platform
 
-> This is the authoritative reference for any developer or AI working on this codebase.
+> This is the authoritative reference for product behaviour and invariants.
 > Read this in full before writing code, making decisions, or modifying any existing pattern.
+>
+> **Implementation note (house-style rewrite):** the app is now a static, no-build
+> Preact + htm site following https://brand.letsimpl.fyi. Sections that name React,
+> Zustand, Tailwind, Vite or `src/` describe the pre-rewrite implementation; the
+> current layout, commands and brand rules are in `AGENTS.md` and `DESIGN.md`.
+> Product rules and the invariants in §21 still apply.
 
 ---
 
@@ -24,9 +30,11 @@ A serverless, open-source platform for students to discover and upload previous 
 
 ---
 
-## 2. UI Design Reference — gpura.org + Mobile-First Mandate
+## 2. UI Design Reference — brand system + Mobile-First Mandate
 
-The visual design is inspired by **https://gpura.org** (Kerala Digital Archive / Granthappura), **adapted heavily for mobile**.
+The visual design is defined by **https://brand.letsimpl.fyi** (vendored unedited into
+`brand/`). gpura.org (Kerala Digital Archive / Granthappura) remains the historical
+inspiration for the document-first layout, adapted for mobile.
 
 ### Design Language
 
@@ -36,10 +44,10 @@ The visual design is inspired by **https://gpura.org** (Kerala Digital Archive /
 | Tone | Institutional but approachable; academic without being sterile |
 | **Primary viewport** | **Mobile (≤ 430px). Desktop is secondary.** |
 | Layout | Single-column by default; bottom-anchored CTAs; thumb-reachable tap targets (min 48×48px) |
-| Typography | Bilingual-ready (English + Malayalam/regional scripts); large body text (min 16px base) |
-| Color palette | Neutral base (off-white / warm white background); one restrained accent color; muted grays for metadata |
+| Typography | Brand Atkinson Hyperlegible Mono for UI, Next for prose; self-hosted, bilingual-ready |
+| Color palette | Brand black and white only; four functional status colours, never decorative |
 | Imagery | Thumbnail previews of paper pages; no decorative stock photos |
-| Navigation | Bottom nav bar on mobile (Home, Browse, Upload, About); top nav only on desktop |
+| Navigation | Bottom bar on mobile (Home, Browse, Upload, About); top nav only on wider screens |
 | Stats bar | Compact counter strip — scrolls horizontally on mobile |
 | Item cards | Full-width on mobile; 2-column tablet; 3-column desktop |
 | Footer | Minimal — hidden on mobile (links moved to bottom nav / About page) |
@@ -57,21 +65,21 @@ The visual design is inspired by **https://gpura.org** (Kerala Digital Archive /
 
 ## 3. Tech Stack
 
-### Frontend
+### Frontend (house-style rewrite)
 | Layer | Choice | Reason |
 |---|---|---|
-| Framework | React 19 (Vite 8, SPA) | Cloudflare Pages ecosystem; large component ecosystem |
-| Styling | Tailwind CSS v4 | Utility-first; mobile-first breakpoints; CSS-first config via `@theme` |
-| Routing | React Router v7 (library mode) | Declarative; works on static hosting with `_redirects` |
-| State | Zustand v5 | Lightweight; no boilerplate; ideal for auth + wizard state |
-| HTTP | Native `fetch` | No axios; keep bundle lean |
-| **Image → PDF** | **`pdf-lib` + `browser-image-compression`** | Client-side only; no server; converts captured photos to a single PDF |
-| **Camera capture** | **`mediaDevices.getUserMedia` / `<input capture="environment">`** | Native browser API; no library needed; falls back to file picker on desktop |
-| **Edge detection + perspective warp** ★ Phase 8 | **OpenCV.js (WASM) _or_ pure-canvas Sobel/Hough (decided during 8.1 spike)** | Detects the paper quad in each captured frame, warps it to a clean rectangle — no squished/trapezoidal pages. Dynamic import only. |
-| **Image enhancement** ★ Phase 8 | **Pure-canvas pipeline in `lib/paperEnhance.js`** | Greyscale → Sauvola-style adaptive threshold → gentle contrast stretch. Colour-preserving by default. Runs in `OffscreenCanvas`. |
-| **On-device OCR** ★ Phase 8 | **`scribe.js-ocr`** | Runs Tesseract-backed OCR inside a Web Worker on the first 1–2 PDF pages to extract `courseName` / `courseCode` / `examType` suggestions. **AGPL-3.0** — credited in `About.jsx`. All WASM + language data served from `public/vendor/scribe/` (same-origin requirement). |
-| PDF preview | `pdfjs-dist` | Lazy-loaded only on paper detail pages |
-| Fonts | `@fontsource` packages | Self-hosted; no Google Fonts CDN dependency |
+| App | Static HTML + Preact + htm, imported from `vendor/` | No build step, no runtime npm dependencies; matches `commoner`/`readrfc` |
+| Styling | Vendored brand tokens, `base.css`, `components.css` + layout-only `styles.css` | One source of truth for design |
+| Routing | Hash routes parsed by `js/route.js` | Works on any static host, no rewrite rules |
+| State | URL + guarded localStorage; one `App` class in `js/ui.js` | Small, testable, no framework state library |
+| HTTP | Native `fetch` with `AbortController` | Anonymous, timeout-bound requests |
+| Image → PDF | Vendored `pdf-lib` + `browser-image-compression` ESM | Client-side only; no server |
+| Camera capture | `getUserMedia` / `<input capture="environment">` | Native API; falls back to file picker on desktop |
+| Edge detection + perspective warp | Pure-canvas Sobel/Hough in `js/capture.js` | No squished pages; dynamic use only |
+| Image enhancement | Pure-canvas pipeline (Laplacian gate → Sauvola → contrast) | Reversible per page |
+| On-device OCR | Vendored `scribe.js-ocr` assets in `vendor/scribe/` | Same-origin WASM/model files; serial worker; 15s budget |
+| PDF preview | Vendored `pdfjs-dist` ESM + worker | Lazy-loaded on paper detail pages |
+| Fonts | Brand's self-hosted Atkinson faces in `brand/fonts/` | No CDN dependency |
 
 ### Infrastructure
 | Purpose | Service | Notes |
@@ -87,6 +95,9 @@ The visual design is inspired by **https://gpura.org** (Kerala Digital Archive /
 ---
 
 ## 4. Repository Structure
+
+> The tree below is the pre-rewrite React layout, kept for historical reference.
+> Current layout: `AGENTS.md`.
 
 ```
 pyqp/
@@ -1215,8 +1226,12 @@ npm run dev:full     # with Cloudflare Workers (Wrangler)
 ### Build & Deploy
 
 ```bash
-npm run build
-# Cloudflare Pages auto-deploys dist/ on push to main
+python3 tools/serve.py          # static UI locally
+npm test                        # node:test units + design/shell policy tests
+npm run test:e2e                # Playwright against the production CSP
+npm run brand:check             # vendored brand drift
+# The deploy workflow stages dist/ (including functions/), stamps versions and
+# deploys to Cloudflare Pages on push to main. There is no build command.
 ```
 
 ---
@@ -1262,7 +1277,7 @@ We do not run tests against the live Archive.org production APIs to avoid rate l
 - **Metadata API (`metadata/:identifier`)**: Mock this for the deduplication check step, returning either a 404 (no duplicate) or a 200 with JSON (duplicate found).
 
 ### 3. Mocking Cloudflare Workers
-The frontend interacts with Cloudflare Pages Functions (`/functions/api/*`). These should be intercepted at the network level in Playwright:
+The frontend calls the same-origin `/api/*` routes served by Cloudflare Pages Functions. Intercept those at the network level in Playwright (the old `**/functions/api/*` patterns never matched):
 - **`/api/login`**: Return a mock successful response with fake `accessKey` and `secretKey`, or a 401 for invalid credentials testing.
 - **`/api/s3keys`**: Return mock S3 keys to simulate session restoration.
 - **`/api/upload`**: Intercept the PUT request. Verify the `Authorization` header and the `x-archive-meta-*` headers are correctly formatted, then return a mock 200 OK. Do not actually upload the generated PDF.

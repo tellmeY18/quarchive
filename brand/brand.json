@@ -1,0 +1,18 @@
+{
+  "source": "https://brand.letsimpl.fyi",
+  "tokensVersion": "0.3.0",
+  "files": {
+    "tokens/tokens.css": "ca657d9f235e70361bdafab6a9190ff1e727b6fd914aba6048b233082d14a712",
+    "css/base.css": "387c484165b4bc18b8fae3512f7bf1ee0e4125bfccf35726ece2a373f821080c",
+    "css/components.css": "f45a358303ad8cc94773dfff16c0eb7b5f6d2852f28da8f6154571ea5bc748e2",
+    "fonts/atkinson-hyperlegible-mono-latin.woff2": "f0230cab68ecdc96766fde00a89cf3167e668c3a8756f844cab554dc3bcfd030",
+    "fonts/atkinson-hyperlegible-next-latin-wght-normal.woff2": "18b2a1a39a2fa298b0ba5390aca68462669826c90925656f1c1f6796e0e1bbaf",
+    "fonts/courier-prime-400-latin.woff2": "f09844e1f4fe9e67df2cc77474519e68756d559b4648278b9dd4f03c8ac9c31f",
+    "fonts/courier-prime-700-latin.woff2": "5c7ae1cc9aae183453565c836b74a1b988f5f2e52b65098decb909b3930957ec",
+    "fonts/noto-serif-malayalam.woff2": "4bade43046fb1db739a55b1e08ef9b67f202b9f3033b4d6b2b7aef6a60cfd151",
+    "fonts/Atkinson-Hyperlegible-Mono.OFL.txt": "1ebb31cf7393164f20d10c1d48406cddb5314feff8465531cf1e4ba37e9dd740",
+    "fonts/Atkinson-Hyperlegible-Next.OFL.txt": "474a034e99845062f661855caaa505880d0e9009deddc2727a92795eab374955",
+    "fonts/Courier-Prime.OFL.txt": "9a755af092b494944c99f471be6fddd19b006a448fefdc4717e4ee0aa09a97b0",
+    "fonts/Noto-Serif-Malayalam.OFL.txt": "1df18163a0bf60f02131401ba1609df90051f40c4047684dda1c8a2e9586f7f2"
+  }
+}

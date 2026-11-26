@@ -1,158 +1,47 @@
-# Quarchive 🦆
+# Quarchive
 
-> *Every paper. Every quack.*
->
 > The open-source archive of previous year university exam question papers.
 > Permanently free, powered by the Internet Archive.
 
-## About the name
+Quarchive is a static, serverless web app. Students can find papers by university, course, year and exam type, preview them in the browser, and upload scanned or photographed papers directly to the Internet Archive. There is no database, no account system of our own and no ongoing cost.
 
-**Quarchive** = **Quack** + **Archive**. The project mascot — **Quackademic**, a scholarly duck who keeps papers safe — is planned but **not yet implemented**: the visual branding (logo, favicon, mascot illustrations, OG image) is deferred to **Phase 10** of [`ROADMAP.md`](./ROADMAP.md). Both Phase 9 (Bulk Upload) and Phase 10 (Branding) are currently on hold; maintenance and correctness work take priority.
+## How it works
 
-Prompts for regenerating brand assets once Phase 10 starts live in [`Generate.md`](./Generate.md) (gitignored; each maintainer keeps their own copy). None of those assets are wired into the app yet.
+- **Search & browse** — Archive.org Advanced Search API, filtered to `subject:quarchive`; institutions come from Wikidata.
+- **Paper detail** — metadata, download and item links, with a lazy canvas PDF viewer.
+- **Upload** — PDFs only. On a phone the camera is the first step: frames are detected, cropped, enhanced and assembled into a PDF on the device. Optional on-device OCR suggests metadata; nothing is auto-filled or sent away.
+- **Bulk upload** — drop up to 50 PDFs, share an institution across the batch, confirm each file's metadata, then upload with bounded concurrency and per-file dedup.
+- **Permanent storage** — files go to Archive.org IAS3 through same-origin Cloudflare Pages Functions, which exist only to proxy requests that Archive.org does not allow cross-origin.
 
-## Features
+## Stack and style
 
-- 🔍 **Search & Browse** — Find papers by university, course, year, or exam type
-- 📄 **PDF Viewer** — Preview papers directly in the browser
-- 📷 **Scan & Upload** — Snap the paper on your phone; auto-crop, enhance, and OCR-assisted metadata happen on device
-- 📂 **Bulk Upload** *(Phase 9, deferred)* — Planned: drop a folder of PDFs from a laptop; path-aware metadata inference, per-file dedup, and a crash-resilient queue. Full design locked in `ROADMAP.md`, implementation paused.
-- 🏛️ **Permanent Storage** — Every paper is stored on the Internet Archive — free forever
-- ☁️ **No Backend** — Fully serverless, runs on Cloudflare Pages
+The design is the [letsimpl.fyi brand system](https://brand.letsimpl.fyi): black and white, Atkinson Hyperlegible Mono, square corners, `ls-` components, light/dark and accessibility settings. Brand files are vendored unedited into `brand/` and verified by `npm run brand:check`.
 
-## Tech Stack
+The app follows the org's house style: plain HTML/CSS with Preact + htm imported from `vendor/`, **no build step and no runtime npm dependencies**. Hash routes work on any static host. `sw.js` precaches the shell; `_headers` sets a strict CSP. The only server code is `functions/api/`.
 
-- **Frontend:** React 19, Tailwind CSS v4, React Router v7, Zustand v5
-- **Capture pipeline:** `pdf-lib`, `browser-image-compression`, pure-canvas Sobel + Hough edge detection
-- **On-device OCR:** `scribe.js-ocr` (AGPL-3.0)
-- **Storage:** Internet Archive (IAS3)
-- **Institution Data:** Wikidata SPARQL
-- **Hosting:** Cloudflare Pages + Pages Functions
+## Development
 
-## Brand *(deferred — Phase 10)*
-
-The duck identity is planned but not implemented. The palette, mascot brief, voice rules, and asset generation prompts are locked in so whoever picks up Phase 10 can execute it as a single batch without design-by-committee:
-
-| Token | Value | Role |
-|---|---|---|
-| Duck Yellow | `#F5C518` | Primary accent / CTA |
-| Pond Ink | `#1A1D24` | Headings, strong text |
-| Paper Cream | `#FAF6EE` | Page background |
-| Reed | `#6B7A5A` | Muted secondary / metadata |
-
-See `ROADMAP.md` Phase 10 for the full checklist and `Generate.md` for the Gemini Nano Banana prompts. Branding work is explicitly paused — do not pick up these tasks opportunistically.
-
-**Voice (planned):**
-- Primary tagline: *Every paper. Every quack.*
-- Short-form: *Scan. Quack. Archive.*
-- Long-form: *The open-source archive of previous year question papers.*
-
-## Local Development
-
-### Prerequisites
-
-- Node.js 20+
-- npm
-
-### Install
+Prerequisites: Node.js 20+, Python 3. From a Nix shell, `nix develop` supplies everything including Playwright and Chromium.
 
 ```bash
-npm install
+python3 tools/serve.py      # static UI at http://localhost:8080
+npm test                    # node:test units + design/shell policy tests
+npm run test:e2e            # Playwright against the production CSP
+npm run brand               # re-fetch brand files from brand.letsimpl.fyi
+npm run brand:check         # fail on vendored-brand drift
+treefmt                     # format before committing
 ```
 
-### Two dev modes
-
-This project has two parts: a **React frontend** (the SPA) and **Cloudflare Pages Functions** (serverless workers in `functions/api/` that proxy requests to Archive.org). You need to choose the right dev mode depending on what you’re working on.
-
-#### 1. Frontend only — `npm run dev`
-
-```bash
-npm run dev
-```
-
-Starts the Vite dev server at `http://localhost:5173` with hot module replacement.
-
-**What works:** Browsing, searching, viewing papers, all UI/styling work.
-
-**What doesn’t work:** Sign in, upload, and anything that calls `/api/*` endpoints — those routes are handled by the Cloudflare Pages Functions which aren’t running in this mode. You’ll see network errors if you try to log in.
-
-Use this when you’re working on the UI, search, browse, or paper detail pages.
-
-#### 2. Full stack — `npm run build && npm run dev:full`
-
-```bash
-npm run build
-npm run dev:full
-```
-
-This first builds the frontend into `dist/`, then starts Wrangler (Cloudflare’s local dev tool) which serves both the static frontend **and** the Pages Functions at `http://localhost:8788`.
-
-**What works:** Everything — including sign in with Archive.org, uploading papers, and all `/api/*` endpoints.
-
-**Trade-off:** No hot reload. You need to re-run `npm run build` after each frontend change, then restart `npm run dev:full`. This mode is primarily for testing the auth and upload flows end-to-end.
-
-### Which mode should I use?
-
-| Task | Mode |
-|------|------|
-| UI work, styling, layout | `npm run dev` |
-| Search, browse, paper detail | `npm run dev` |
-| Testing sign-in flow | `npm run build && npm run dev:full` |
-| Testing upload flow | `npm run build && npm run dev:full` |
-| Working on worker functions (`functions/api/`) | `npm run build && npm run dev:full` |
-
-### Project structure (key directories)
-
-```
-src/              → React frontend (pages, components, hooks, stores)
-functions/api/    → Cloudflare Pages Functions (serverless workers)
-  ├── login.js    → Proxies Archive.org login (needed because Archive.org doesn’t allow cross-origin requests)
-  ├── s3keys.js   → Generates S3 upload keys for new Archive.org accounts
-  ├── upload.js   → Proxies file uploads to Archive.org’s IAS3 storage
-  └── validate.js → Checks if stored login credentials are still valid
-public/
-  ├── brand/      → Duck mascot, logos, favicons, OG image (populated in Phase 10; currently empty)
-  └── _redirects  → SPA fallback for Cloudflare Pages
-dist/             → Build output (generated by npm run build)
-```
+To exercise sign-in or upload, run the site through Cloudflare Pages Functions with `wrangler pages dev` against a staged `dist/`; the static server cannot handle `/api/*`. No environment variables or secrets are required to deploy.
 
 ## Deployment
 
-Quarchive is designed to be deployed on **Cloudflare Pages** which automatically hosts the static frontend and runs the `functions/api/` directory as serverless Pages Functions.
+Push to `main`. `.github/workflows/deploy.yml` runs the tests, stages `dist/` (including `functions/`), stamps `sw.js` and `js/config.js` with the same version, verifies every precached path exists and deploys to the Cloudflare Pages project `quarchive`.
 
-1. Push your forked repository to GitHub or GitLab.
-2. Log in to the [Cloudflare Dashboard](https://dash.cloudflare.com/) and navigate to **Workers & Pages**.
-3. Click **Create application**, select the **Pages** tab, and choose **Connect to Git**.
-4. Select your repository and configure the build settings:
-   - **Framework preset:** `Vite` (or None)
-   - **Build command:** `npm run build`
-   - **Build output directory:** `dist`
-5. Click **Save and Deploy**.
+## Identity
 
-Cloudflare Pages will automatically detect the `functions/` directory and deploy them alongside your React frontend.
+The brand repo has no Quarchive asset kit. The monoline duck-with-cap files in `icons/` were generated by an AI subagent at the user's explicit request, pending founder review; see `icons/BRAND-README.md`. The header wordmark itself is live text in CSS.
 
-**Environment Variables:**
-None! Quarchive requires absolutely zero environment variables or secrets to be configured in Cloudflare. All authentication happens client-side and is securely passed through the workers per-request.
+## Licence
 
-## Architecture
-
-Quarchive is a fully static single-page application deployed on Cloudflare Pages. File uploads go directly to the Internet Archive via IAS3, proxied through Cloudflare Pages Functions for CORS. Institution metadata comes from Wikidata. There is no database, no auth server, and no ongoing cost.
-
-The Pages Functions exist because Archive.org’s login and upload endpoints don’t support cross-origin browser requests. The workers act as thin pass-through proxies — they forward your credentials to Archive.org per-request and never store them.
-
-## Contributing
-
-1. Create an [Internet Archive account](https://archive.org/account/signup)
-2. Fork this repository
-3. Upload papers through the app, or contribute code via pull requests
-
-## Credits
-
-- **Mascot & brand:** Quackademic the duck — planned (Phase 10); prompts in `Generate.md` target Google Gemini "Nano Banana".
-- **OCR:** [`scribe.js-ocr`](https://github.com/scribeocr/scribe.js) — AGPL-3.0
-- **Permanent hosting:** [Internet Archive](https://archive.org/)
-- **UI inspiration:** [gpura.org](https://gpura.org) — Kerala Digital Archive (Granthappura)
-
-## License
-
-See [LICENSE](LICENSE) for details.
+Code: AGPL-3.0-or-later. Brand material and docs: see `../brand/LICENSING.md`. Vendored libraries keep their own licences; see `CREDITS.md` and `vendor/README.md`.

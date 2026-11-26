@@ -1,0 +1,38 @@
+/* App styles. Branding comes from brand/ (vendored from https://brand.letsimpl.fyi, the source of truth):
+   tokens, fonts, base and ls- components load first. This file defines no colour, font or size of its own,
+   only layout, built from brand tokens. Kept small on purpose: the text is the interface. */
+body { margin: 0; background: var(--page); color: var(--ink); }
+[hidden] { display: none !important; }
+button, input, select, textarea { font: inherit; }
+.page { max-width: 960px; margin: 0 auto; padding: var(--space-3) var(--pad, var(--space-4)) var(--space-6); }
+.boot { padding: var(--space-4); }
+
+/* App bar */
+.app-header { position: sticky; top: 0; z-index: 5; background: var(--page); border-bottom: var(--rule); padding-top: env(safe-area-inset-top); }
+.header-inner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); max-width: 960px; min-height: var(--touch-preferred); margin: 0 auto; padding: var(--space-1) var(--pad, var(--space-4)); }
+.header-inner > .ls-links { margin: 0; }
+.brand { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--touch-preferred); color: var(--ink); text-decoration: none; font-size: var(--text-section); font-weight: var(--weight-bold); }
+.brand .mark { display: block; }
+.theme { min-width: var(--touch-preferred); padding: 0; }
+
+/* Paper cards: a responsive grid, one column on a phone. */
+.paper-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr)); gap: var(--space-3); margin: 0 0 var(--space-4); padding: 0; list-style: none; }
+.paper-card { display: flex; flex-direction: column; gap: var(--space-2); min-height: var(--touch-preferred); margin: 0; padding: var(--space-3); border: var(--hair); }
+.paper-card > :last-child { margin-bottom: 0; }
+.paper-title { overflow-wrap: anywhere; }
+.paper-meta { color: var(--muted); font-size: var(--text-secondary); }
+@media (max-width: 480px) { .paper-grid { grid-template-columns: 1fr; } }
+
+/* Bottom navigation sits above the safe area and never covers the last card. */
+.bottom-nav { position: sticky; bottom: 0; z-index: 6; }
+.page--with-nav { padding-bottom: calc(var(--space-8) + env(safe-area-inset-bottom)); }
+
+/* Paper preview: pdf.js draws into a canvas; the wrapper scrolls on narrow screens. */
+.pdf-viewer { max-width: 100%; margin: 0 0 var(--space-4); overflow: auto; }
+.pdf-canvas { display: block; max-width: 100%; height: auto; }
+
+/* Footer and toasts */
+.foot { border-top: var(--rule); color: var(--muted); font-size: var(--text-secondary); }
+.foot p { max-width: var(--measure); margin: 0 0 var(--space-2); }
+.toast-wrap { position: fixed; z-index: 20; left: 0; right: 0; bottom: calc(var(--space-5) + env(safe-area-inset-bottom)); display: flex; justify-content: center; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }

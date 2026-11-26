@@ -5,7 +5,16 @@
 
 ---
 
-## Current Status: Phase 8 Complete ✅ — Capture robustness pipeline wired, OCR integrated, unit + lint + build all green.
+## Current Status: house-style rewrite in progress
+
+The app is being ported from the React/Vite/Tailwind implementation to the org's
+static, no-build style (`brand.letsimpl.fyi` tokens, Preact + htm, vendored ESM,
+hash routes, service worker, strict CSP). All previously implemented product
+flows — search, paper detail, auth, camera capture, OCR, single and bulk upload —
+are being preserved. The phase notes below describe the original implementation
+and remain the behavioural reference; `AGENTS.md` and `DESIGN.md` describe the
+current architecture. The former Phase 10 duck-colour branding plan is superseded
+by the brand system; see the Phase 10 note.
 
 **Phase 8 final state:**
 
@@ -466,7 +475,12 @@ All three layers from CLAUDE.md §12 run per file, but with batch-specific UX:
 
 ## Phase 10 — Branding: Quackademic the Duck *(deferred)*
 
-> **Status: deferred.** The branding work described below is a full plan of record but is explicitly paused. Both Phase 9 (Bulk Upload) and Phase 10 (Branding) are on hold — branding is polish and should not be started until the bulk-upload path lands, and bulk upload itself is parked. Do not pick up branding tasks opportunistically.
+> **Status: superseded.** Branding now follows https://brand.letsimpl.fyi, not the
+> yellow duck palette below. The user explicitly asked for a minimal monoline
+> duck-with-cap mark; `icons/` contains an agent-generated provisional kit pending
+> founder review. Bulk upload (Phase 9A) is implemented in code even though parts
+> of this roadmap still describe it as parked. The notes below are kept as the
+> historical plan of record, not as instructions for the current UI.
 
 **Goal:** Give Quarchive a distinct, memorable visual identity built around the pun at the heart of the name — **Quack** + **Archive**. The mascot is **Quackademic**, a scholarly duck who keeps papers safe. Applies to logo, favicon, navigation, empty states, OG image, and README hero. Must respect the existing mobile-first, editorial aesthetic (CLAUDE.md §2).
 

@@ -1,0 +1,70 @@
+name: Deploy
+
+# Tests every push and pull request. Pushes to main deploy to Cloudflare Pages
+# (project "quarchive", site https://quarchive.pages.dev/).
+# Repository (or org) secrets: CLOUDFLARE_API_TOKEN (Pages: Edit) and CLOUDFLARE_ACCOUNT_ID.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - run: node tools/sync-brand.mjs --check
+        continue-on-error: true # warns when the live brand moved ahead of brand/
+
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://quarchive.pages.dev
+    steps:
+      - uses: actions/checkout@v4
+      # Only runtime files are published; tests, tools and docs stay private.
+      # Pages Functions live in dist/functions/ and must be staged with the static shell.
+      - name: Stage site
+        run: |
+          mkdir -p dist
+          cp -R index.html styles.css manifest.json sw.js _headers robots.txt sitemap.xml LICENSE dist/
+          for dir in js vendor brand icons workers functions data; do
+            if [ -d "$dir" ]; then cp -R "$dir" dist/; fi
+          done
+          # Stamp one version into the service worker cache name and the app, so every deploy busts every cache.
+          V="$(date -u +%Y.%m.%d)-${GITHUB_RUN_NUMBER}"
+          sed -i "s/quarchive-shell-dev/quarchive-shell-v$V/" dist/sw.js
+          sed -i "s/export const APP_VERSION = 'dev';/export const APP_VERSION = '$V';/" dist/js/config.js
+          grep -q "quarchive-shell-v$V" dist/sw.js && grep -q "APP_VERSION = '$V'" dist/js/config.js
+          echo "Stamped $V"
+          # Every file the page loads must be present.
+          node -e "
+            const fs = require('fs');
+            const html = fs.readFileSync('index.html', 'utf8');
+            const missing = [...html.matchAll(/(?:href|src)=\"\.\/([^\"]+)\"/g)].map(m => m[1]).filter(f => !fs.existsSync('dist/' + f));
+            if (missing.length) { console.error('Missing from dist:', missing); process.exit(1); }
+            const sw = fs.readFileSync('dist/sw.js', 'utf8');
+            const shell = [...sw.slice(sw.indexOf('const SHELL'), sw.indexOf('];')).matchAll(/'\\.\\/([^']*)'/g)].map(m => m[1]).filter(f => f && !fs.existsSync('dist/' + f));
+            if (shell.length) { console.error('Service worker precaches missing files:', shell); process.exit(1); }
+          "
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=quarchive --branch=main --commit-dirty=true
