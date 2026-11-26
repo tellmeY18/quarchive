@@ -222,6 +222,55 @@ test('paper: metadata, links and a proxied PDF preview render from the archive',
   await context.close();
 });
 
+test('paper: Share hands the deep link to the native share sheet when available', async () => {
+  const { page, context, outside, violations } = await open(`#/paper/${ID}`, {
+    init: () => {
+      window.__shared = [];
+      Object.defineProperty(navigator, 'share', {
+        configurable: true,
+        value: (data) => { window.__shared.push(data); return Promise.resolve(); },
+      });
+    },
+  });
+  await page.getByRole('button', { name: 'Share' }).click();
+  assert.deepEqual(await page.evaluate(() => window.__shared), [{
+    title: 'End semester question paper',
+    url: `${base}/#/paper/${ID}`,
+  }]);
+  assert.deepEqual(outside, []);
+  assert.deepEqual(violations, []);
+  await context.close();
+});
+
+test('paper: Share falls back to the clipboard when the native sheet fails', async () => {
+  const { page, context, outside, violations } = await open(`#/paper/${ID}`, {
+    init: () => {
+      Object.defineProperty(navigator, 'share', {
+        configurable: true,
+        value: () => Promise.reject(new Error('no share sheet')),
+      });
+    },
+  });
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+  await page.getByRole('button', { name: 'Share' }).click();
+  await page.getByText('Link copied').waitFor();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), `${base}/#/paper/${ID}`);
+  assert.deepEqual(outside, []);
+  assert.deepEqual(violations, []);
+  await context.close();
+});
+
+test('paper: Copy link copies the deep link and confirms with a toast', async () => {
+  const { page, context, outside, violations } = await open(`#/paper/${ID}`);
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+  await page.getByRole('button', { name: 'Copy link' }).click();
+  await page.getByText('Link copied').waitFor();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), `${base}/#/paper/${ID}`);
+  assert.deepEqual(outside, []);
+  assert.deepEqual(violations, []);
+  await context.close();
+});
+
 test('paper: an unknown identifier says so rather than hanging', async () => {
   const { page, context } = await open('#/paper/does-not-exist');
   await page.getByRole('heading', { name: 'Paper not found' }).waitFor();

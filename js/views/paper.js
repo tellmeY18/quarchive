@@ -2,6 +2,7 @@ import { h, Component } from '../../vendor/preact.module.js';
 import htm from '../../vendor/htm.module.js';
 import { Icon } from '../icons.js';
 import { apiGet } from '../fetch.js';
+import { formatRoute } from '../route.js';
 import { buildMetadataUrl, paperItemUrl, paperDownloadUrl, paperThumbnail } from '../archive.js';
 import { Busy, Notice, TagList, Empty } from '../components.js';
 import PdfViewer from '../pdfViewer.js';
@@ -37,6 +38,8 @@ export class Paper extends Component {
     this.state = { paper: null, pdfFilename: '', loading: true, notFound: false, error: '' };
     this.controller = null;
     this.retry = this.retry.bind(this);
+    this.share = this.share.bind(this);
+    this.copyLink = this.copyLink.bind(this);
   }
 
   componentDidMount() {
@@ -106,6 +109,35 @@ export class Paper extends Component {
     this.load();
   }
 
+  shareUrl() {
+    const url = new URL(location.href);
+    url.hash = formatRoute({ view: 'paper', params: { id: this.props.params?.id || '' } });
+    return url.href;
+  }
+
+  async share() {
+    const url = this.shareUrl();
+    const title = this.state.paper?.description || this.state.paper?.title || this.props.params?.id || 'Question paper';
+    try {
+      if (globalThis.navigator?.share) {
+        await navigator.share({ title, url });
+        return;
+      }
+    } catch (error) {
+      if (error?.name === 'AbortError') return;
+    }
+    await this.copyLink(url);
+  }
+
+  async copyLink(url = this.shareUrl()) {
+    try {
+      await navigator.clipboard.writeText(url);
+      this.props.notify?.('Link copied', 'success');
+    } catch {
+      this.props.notify?.(url, 'info', 6000);
+    }
+  }
+
   render(props, state) {
     if (state.loading) return html`<${Busy} label="Loading paper…" />`;
 
@@ -158,6 +190,12 @@ export class Paper extends Component {
         <a class="ls-btn" href=${archiveUrl} target="_blank" rel="noopener noreferrer">
           View on Archive.org <${Icon} name="external" small=${true} />
         </a>
+        ${globalThis.navigator?.share ? html`<button type="button" class="ls-btn ls-btn--small" aria-label="Share" onClick=${this.share}>
+          <${Icon} name="share" small=${true} />
+        </button>` : null}
+        <button type="button" class="ls-btn ls-btn--small" aria-label="Copy link" onClick=${() => this.copyLink()}>
+          <${Icon} name="link" small=${true} />
+        </button>
       </div>
 
       ${downloadUrl ? html`<${PdfViewer} url=${downloadUrl} />` : html`<${Empty} icon="file" title="No PDF preview available for this paper.">
